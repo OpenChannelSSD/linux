@@ -1563,6 +1563,12 @@ void init_request_from_bio(struct request *req, struct bio *bio)
 	blk_rq_bio_prep(req->q, req, bio);
 }
 
+void blk_init_request_from_bio(struct request *req, struct bio *bio)
+{
+	init_request_from_bio(req, bio);
+}
+EXPORT_SYMBOL(blk_init_request_from_bio);
+
 void blk_queue_bio(struct request_queue *q, struct bio *bio)
 {
 	const bool sync = !!(bio->bi_rw & REQ_SYNC);
