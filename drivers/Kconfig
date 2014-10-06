@@ -40,6 +40,8 @@ source "drivers/message/i2o/Kconfig"
 
 source "drivers/macintosh/Kconfig"
 
+source "drivers/lightnvm/Kconfig"
+
 source "drivers/net/Kconfig"
 
 source "drivers/isdn/Kconfig"

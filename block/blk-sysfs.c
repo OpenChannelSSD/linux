@@ -7,6 +7,7 @@
 #include <linux/bio.h>
 #include <linux/blkdev.h>
 #include <linux/blktrace_api.h>
+#include <linux/lightnvm.h>
 #include <linux/blk-mq.h>
 
 #include "blk.h"
@@ -568,6 +569,18 @@ int blk_register_queue(struct gendisk *disk)
 	if (ret)
 		return ret;
 
+	if (blk_queue_lightnvm(q))
+	{
+		/*
+		 * FIXME: How to get from queue to disk (used by internal cmds)?
+		 */
+		q->nvm->disk = disk;
+
+		ret = blk_lightnvm_init_sysfs(dev);
+		if (ret)
+			return ret;
+	}
+
 	ret = kobject_add(&q->kobj, kobject_get(&dev->kobj), "%s", "queue");
 	if (ret < 0) {
 		blk_trace_remove_sysfs(dev);
@@ -601,6 +614,9 @@ void blk_unregister_queue(struct gendisk *disk)
 	if (WARN_ON(!q))
 		return;
 
+	if (q->nvm)
+		blk_lightnvm_unregister(q);
+
 	if (q->mq_ops)
 		blk_mq_unregister_disk(disk);
 
@@ -609,6 +625,7 @@ void blk_unregister_queue(struct gendisk *disk)
 
 	kobject_uevent(&q->kobj, KOBJ_REMOVE);
 	kobject_del(&q->kobj);
+	blk_lightnvm_remove_sysfs(disk_to_dev(disk));
 	blk_trace_remove_sysfs(disk_to_dev(disk));
 	kobject_put(&disk_to_dev(disk)->kobj);
 }

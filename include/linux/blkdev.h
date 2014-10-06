@@ -209,6 +209,9 @@ struct request {
 
 	/* for bidi */
 	struct request *next_rq;
+#if CONFIG_LIGHTNVM
+	sector_t phys_sector;
+#endif
 };
 
 static inline unsigned short req_get_ioprio(struct request *req)
@@ -304,6 +307,10 @@ struct queue_limits {
 	unsigned char		discard_zeroes_data;
 	unsigned char		raid_partial_stripes_expensive;
 };
+
+#ifdef CONFIG_LIGHTNVM
+#include <linux/lightnvm.h>
+#endif
 
 struct request_queue {
 	/*
@@ -451,6 +458,9 @@ struct request_queue {
 #ifdef CONFIG_BLK_DEV_IO_TRACE
 	struct blk_trace	*blk_trace;
 #endif
+#ifdef CONFIG_LIGHTNVM
+	struct nvm_dev *nvm;
+#endif
 	/*
 	 * for flush operations
 	 */
@@ -509,6 +519,7 @@ struct request_queue {
 #define QUEUE_FLAG_INIT_DONE   20	/* queue is initialized */
 #define QUEUE_FLAG_NO_SG_MERGE 21	/* don't attempt to merge SG segments*/
 #define QUEUE_FLAG_SG_GAPS     22	/* queue doesn't support SG gaps */
+#define QUEUE_FLAG_LIGHTNVM    23	/* lightnvm managed queue */
 
 #define QUEUE_FLAG_DEFAULT	((1 << QUEUE_FLAG_IO_STAT) |		\
 				 (1 << QUEUE_FLAG_STACKABLE)	|	\
@@ -596,6 +607,7 @@ static inline void queue_flag_clear(unsigned int flag, struct request_queue *q)
 #define blk_queue_discard(q)	test_bit(QUEUE_FLAG_DISCARD, &(q)->queue_flags)
 #define blk_queue_secdiscard(q)	(blk_queue_discard(q) && \
 	test_bit(QUEUE_FLAG_SECDISCARD, &(q)->queue_flags))
+#define blk_queue_lightnvm(q)	test_bit(QUEUE_FLAG_LIGHTNVM, &(q)->queue_flags)
 
 #define blk_noretry_request(rq) \
 	((rq)->cmd_flags & (REQ_FAILFAST_DEV|REQ_FAILFAST_TRANSPORT| \
@@ -896,6 +908,11 @@ static inline unsigned int blk_rq_sectors(const struct request *rq)
 static inline unsigned int blk_rq_cur_sectors(const struct request *rq)
 {
 	return blk_rq_cur_bytes(rq) >> 9;
+}
+
+static inline sector_t blk_rq_phys_pos(const struct request *rq)
+{
+	return rq->phys_sector;
 }
 
 static inline unsigned int blk_queue_get_max_sectors(struct request_queue *q,
@@ -1595,6 +1612,17 @@ static inline bool blk_integrity_is_initialized(struct gendisk *g)
 }
 
 #endif /* CONFIG_BLK_DEV_INTEGRITY */
+
+#ifdef CONFIG_LIGHTNVM
+struct lightnvm_dev_ops;
+extern int blk_lightnvm_register(struct request_queue *, struct lightnvm_dev_ops *);
+#else
+struct lightnvm_dev_ops;
+static int blk_lightnvm_register(struct request_queue *q, struct lightnvm_dev_ops *ops)
+{
+	return -EINVAL;
+}
+#endif /* CONFIG_LIGHTNVM */
 
 struct block_device_operations {
 	int (*open) (struct block_device *, fmode_t);

@@ -1,0 +1,20 @@
+#
+# LightNVM configuration
+#
+
+menuconfig LIGHTNVM
+	bool "LightNVM support"
+	depends on BLK_DEV
+	default y
+	---help---
+	  Say Y here to get to enable Open-channel SSDs compatible with LightNVM
+	  to be recognized.
+
+	  LightNVM implements some internals of SSDs within the host.
+	  Devices are required to support LightNVM, and allow them to managed by
+	  the host. LightNVM is used together with an open-channel firmware, that
+	  exposes direct access to the underlying non-volatile memory.
+
+	  If you say N, all options in this submenu will be skipped and disabled;
+	  only do this if you know what you are doing.
+
