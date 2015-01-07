@@ -7,6 +7,7 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/blk-mq.h>
+#include <linux/lightnvm.h>
 #include <linux/hrtimer.h>
 
 struct nullb_cmd {
@@ -146,6 +147,14 @@ MODULE_PARM_DESC(hw_queue_depth, "Queue depth for each hardware queue. Default: 
 static bool use_per_node_hctx = false;
 module_param(use_per_node_hctx, bool, S_IRUGO);
 MODULE_PARM_DESC(use_per_node_hctx, "Use per-node allocation for hardware context queues. Default: false");
+
+static bool lightnvm_enable = false;
+module_param(lightnvm_enable, bool, S_IRUGO);
+MODULE_PARM_DESC(lightnvm_enable, "Enable LightNVM. Default: false");
+
+static int lightnvm_num_channels = 1;
+module_param(lightnvm_num_channels, int, S_IRUGO);
+MODULE_PARM_DESC(lightnvm_num_channels, "Number of channels to be exposed to LightNVM. Default: 1");
 
 static void put_tag(struct nullb_queue *nq, unsigned int tag)
 {
@@ -351,6 +360,61 @@ static void null_request_fn(struct request_queue *q)
 	}
 }
 
+static int null_nvm_id(struct request_queue *q, struct nvm_id *id)
+{
+	sector_t size = gb * 1024 * 1024 * 1024ULL;
+	unsigned long per_chnl_size =
+				size / bs / lightnvm_num_channels;
+	struct nvm_id_chnl *chnl;
+	int i;
+
+	id->ver_id = 0x1;
+	id->nvm_type = NVM_NVMT_BLK;
+	id->nchannels = lightnvm_num_channels;
+
+	id->chnls = kmalloc(sizeof(struct nvm_id_chnl) * id->nchannels,
+								GFP_KERNEL);
+	if (!id->chnls)
+		return -ENOMEM;
+
+	for (i = 0; i < id->nchannels; i++) {
+		chnl = &id->chnls[i];
+		chnl->queue_size = hw_queue_depth;
+		chnl->gran_read = bs;
+		chnl->gran_write = bs;
+		chnl->gran_erase = bs * 256;
+		chnl->oob_size = 0;
+		chnl->t_r = chnl->t_sqr = 25000; /* 25us */
+		chnl->t_w = chnl->t_sqw = 500000; /* 500us */
+		chnl->t_e = 1500000; /* 1.500us */
+		chnl->io_sched = NVM_IOSCHED_CHANNEL;
+		chnl->laddr_begin = per_chnl_size * i;
+		chnl->laddr_end = per_chnl_size * (i + 1) - 1;
+	}
+
+	return 0;
+}
+
+static int null_nvm_get_features(struct request_queue *q,
+						struct nvm_get_features *gf)
+{
+	gf->rsp[0] = (1 << NVM_RSP_L2P);
+	gf->rsp[0] |= (1 << NVM_RSP_P2L);
+	gf->rsp[0] |= (1 << NVM_RSP_GC);
+	return 0;
+}
+
+static int null_nvm_set_rsp(struct request_queue *q, u8 rsp, u8 val)
+{
+	return NVM_RID_NOT_CHANGEABLE | NVM_DNR;
+}
+
+static int null_nvm_get_l2p_tbl(struct request_queue *q, u64 slba, u64 nlb,
+				nvm_l2p_tbl_init_fn *init_cb, struct nvm_stor *s)
+{
+	return 0;
+}
+
 static int null_queue_rq(struct blk_mq_hw_ctx *hctx,
 			 const struct blk_mq_queue_data *bd)
 {
@@ -386,6 +450,13 @@ static int null_init_hctx(struct blk_mq_hw_ctx *hctx, void *data,
 
 	return 0;
 }
+
+static struct lightnvm_dev_ops null_nvm_dev_ops = {
+	.identify		= null_nvm_id,
+	.get_features		= null_nvm_get_features,
+	.set_responsibility	= null_nvm_set_rsp,
+	.get_l2p_tbl		= null_nvm_get_l2p_tbl,
+};
 
 static struct blk_mq_ops null_mq_ops = {
 	.queue_rq       = null_queue_rq,
@@ -525,6 +596,17 @@ static int null_add_dev(void)
 		nullb->tag_set.flags = BLK_MQ_F_SHOULD_MERGE;
 		nullb->tag_set.driver_data = nullb;
 
+		if (lightnvm_enable) {
+			nullb->tag_set.flags &= ~BLK_MQ_F_SHOULD_MERGE;
+			nullb->tag_set.flags |= BLK_MQ_F_LIGHTNVM;
+
+			if (bs != 4096) {
+				pr_warn("null_blk: only 4K block is supported for LightNVM. bs is set to 4K.\n");
+				bs = 4096;
+			}
+
+		}
+
 		rv = blk_mq_alloc_tag_set(&nullb->tag_set);
 		if (rv)
 			goto out_cleanup_queues;
@@ -567,11 +649,6 @@ static int null_add_dev(void)
 		goto out_cleanup_blk_queue;
 	}
 
-	mutex_lock(&lock);
-	list_add_tail(&nullb->list, &nullb_list);
-	nullb->index = nullb_indexes++;
-	mutex_unlock(&lock);
-
 	blk_queue_logical_block_size(nullb->q, bs);
 	blk_queue_physical_block_size(nullb->q, bs);
 
@@ -579,16 +656,31 @@ static int null_add_dev(void)
 	sector_div(size, bs);
 	set_capacity(disk, size);
 
+	mutex_lock(&lock);
+	nullb->index = nullb_indexes++;
+	list_add_tail(&nullb->list, &nullb_list);
+	mutex_unlock(&lock);
+
 	disk->flags |= GENHD_FL_EXT_DEVT;
 	disk->major		= null_major;
 	disk->first_minor	= nullb->index;
 	disk->fops		= &null_fops;
 	disk->private_data	= nullb;
 	disk->queue		= nullb->q;
+
+	if (lightnvm_enable && queue_mode == NULL_Q_MQ) {
+		if (blk_lightnvm_register(nullb->q, &null_nvm_dev_ops))
+			goto out_cleanup_nvm;
+
+		nullb->q->nvm->drv_cmd_size = sizeof(struct nullb_cmd);
+	}
+
 	sprintf(disk->disk_name, "nullb%d", nullb->index);
 	add_disk(disk);
 	return 0;
 
+out_cleanup_nvm:
+	put_disk(disk);
 out_cleanup_blk_queue:
 	blk_cleanup_queue(nullb->q);
 out_cleanup_tags:
