@@ -102,6 +102,7 @@ struct nvme_dev {
 	u32 stripe_size;
 	u32 page_size;
 	u16 oncs;
+	u16 oacs;
 	u16 abort_limit;
 	u8 event_limit;
 	u8 vwc;
