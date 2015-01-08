@@ -376,10 +376,10 @@ enum nvme_admin_opcode {
 	nvme_admin_security_send	= 0x81,
 	nvme_admin_security_recv	= 0x82,
 
-	lnvm_admin_identify		= 0xc0,
-	lnvm_admin_get_features		= 0xc1,
-	lnvm_admin_set_responsibility	= 0xc2,
-	lnvm_admin_get_l2p_tbl		= 0xc3,
+	lnvm_admin_identify		= 0xF0,
+	lnvm_admin_get_features		= 0xF1,
+	lnvm_admin_set_responsibility	= 0xF2,
+	lnvm_admin_get_l2p_tbl		= 0xF3,
 };
 
 enum {
