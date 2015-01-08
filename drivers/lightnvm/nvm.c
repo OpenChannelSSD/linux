@@ -358,10 +358,10 @@ void nvm_free_nvm_id(struct nvm_id *id)
 }
 
 static int nvm_l2p_tbl_init(struct nvm_stor *s, u64 slba, u64 nlb,
-								__le64 *tbl_sgmt)
+							__le64 *tbl_sgmt)
 {
-	struct nvm_addr *a = s->trans_map + slba;
-	struct nvm_rev_addr *ra = s->rev_trans_map;
+	struct nvm_addr *addr = s->trans_map + slba;
+	struct nvm_rev_addr *raddr = s->rev_trans_map;
 	u64 elba = slba + nlb;
 	u64 i;
 
@@ -375,12 +375,17 @@ static int nvm_l2p_tbl_init(struct nvm_stor *s, u64 slba, u64 nlb,
 		u64 pba = le64_to_cpu(tbl_sgmt[i]);
 		/* LNVM treats address-spaces as silos, i.e. LBA and PBA are
 		 * equally large and zero-indexed. */
-		if (unlikely(elba <= pba && pba != U64_MAX)) {
+		if (unlikely(pba >= s->nr_pages && pba != U64_MAX)) {
 			pr_err("lightnvm: L2P data entry is out of bounds - stopping!\n");
 			return -EINVAL;
 		}
-		a[i].addr = pba;
-		ra[pba].addr = slba + i;
+
+		if (pba == U64_MAX)
+			continue;
+
+		addr[i].addr = pba;
+		printk("%llu %llu %lu\n", i, pba, s->nr_pages);
+		raddr[pba].addr = slba + i;
 	}
 	return 0;
 }
