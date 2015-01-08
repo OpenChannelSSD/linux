@@ -362,6 +362,7 @@ static int nvm_l2p_tbl_init(struct nvm_stor *s, u64 slba, u64 nlb,
 {
 	struct nvm_addr *addr = s->trans_map + slba;
 	struct nvm_rev_addr *raddr = s->rev_trans_map;
+	sector_t max_pages = s->nr_pages * (s->sector_size >> 9);
 	u64 elba = slba + nlb;
 	u64 i;
 
@@ -375,7 +376,7 @@ static int nvm_l2p_tbl_init(struct nvm_stor *s, u64 slba, u64 nlb,
 		u64 pba = le64_to_cpu(tbl_sgmt[i]);
 		/* LNVM treats address-spaces as silos, i.e. LBA and PBA are
 		 * equally large and zero-indexed. */
-		if (unlikely(pba >= s->nr_pages && pba != U64_MAX)) {
+		if (unlikely(pba >= max_pages && pba != U64_MAX)) {
 			pr_err("lightnvm: L2P data entry is out of bounds - stopping!\n");
 			return -EINVAL;
 		}
@@ -384,7 +385,6 @@ static int nvm_l2p_tbl_init(struct nvm_stor *s, u64 slba, u64 nlb,
 			continue;
 
 		addr[i].addr = pba;
-		printk("%llu %llu %lu\n", i, pba, s->nr_pages);
 		raddr[pba].addr = slba + i;
 	}
 	return 0;
