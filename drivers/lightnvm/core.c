@@ -21,11 +21,11 @@ static void invalidate_block_page(struct nvm_stor *s, struct nvm_addr *p)
 static inline void __nvm_page_invalidate(struct nvm_stor *s, struct nvm_addr *gp)
 {
 	NVM_ASSERT(spin_is_locked(&s->rev_lock));
-	if (gp->addr == LTOP_EMPTY)
+	if (gp->addr == ADDR_EMPTY)
 		return;
 
 	invalidate_block_page(s, gp);
-	s->rev_trans_map[gp->addr].addr = LTOP_POISON;
+	s->rev_trans_map[gp->addr].addr = ADDR_EMPTY;
 }
 
 void nvm_invalidate_range(struct nvm_stor *s, sector_t slba, unsigned len)
@@ -83,7 +83,7 @@ void nvm_reset_block(struct nvm_block *block)
 
 sector_t nvm_alloc_phys_addr(struct nvm_block *block)
 {
-	sector_t addr = LTOP_EMPTY;
+	sector_t addr = ADDR_EMPTY;
 
 	spin_lock(&block->lock);
 

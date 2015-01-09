@@ -237,6 +237,39 @@ static int nvm_pools_init(struct nvm_stor *s)
 	return 0;
 }
 
+/*
+ * Looks up the logical address from reverse trans map and check if its valid by
+ * comparing the logical to physical address with the physical address.
+ * Returns 0 on free, otherwise 1 if in use
+ */
+static int nvm_block_map(struct nvm_stor *s, struct nvm_block *block)
+{
+	int offset, used = 0;
+	struct nvm_addr *laddr;
+	sector_t paddr, pladdr;
+
+	for (offset = 0; offset < s->nr_pages_per_blk; offset++) {
+		paddr = block_to_addr(block) + offset;
+
+		pladdr = s->rev_trans_map[paddr].addr;
+		if (pladdr == ADDR_EMPTY)
+			continue;
+
+		laddr = &s->trans_map[pladdr];
+
+		if (paddr == laddr->addr) {
+			laddr->block = block;
+		} else {
+			set_bit(offset, block->invalid_pages);
+			block->nr_invalid_pages++;
+		}
+
+		used = 1;
+	}
+
+	return used;
+}
+
 static int nvm_blocks_init(struct nvm_stor *s)
 {
 	struct nvm_pool *pool;
@@ -257,8 +290,10 @@ static int nvm_blocks_init(struct nvm_stor *s)
 			block->pool = pool;
 			block->id = cur_block_id++;
 
-			/* Still free list? Let's look in the reverse map */
-			list_add_tail(&block->list, &pool->free_list);
+			if (nvm_block_map(s, block))
+				list_add_tail(&block->list, &pool->used_list);
+			else
+				list_add_tail(&block->list, &pool->free_list);
 		}
 	}
 
@@ -321,8 +356,8 @@ static int nvm_stor_map_init(struct nvm_stor *s)
 		struct nvm_addr *p = &s->trans_map[i];
 		struct nvm_rev_addr *r = &s->rev_trans_map[i];
 
-		p->addr = LTOP_EMPTY;
-		r->addr = 0xDEADBEEF;
+		p->addr = ADDR_EMPTY;
+		r->addr = ADDR_EMPTY;
 	}
 
 	return 0;
@@ -374,8 +409,8 @@ static int nvm_l2p_tbl_init(struct nvm_stor *s, u64 slba, u64 nlb,
 		return -EINVAL;
 	}
 
-	/* TODO 'struct nvm_block' needs to reflect the state we get from here */
 	for (i = 0; i < nlb; i++) {
+		/* notice that the values are 1-indexed. 0 is unmapped */
 		u64 pba = le64_to_cpu(tbl_sgmt[i]);
 		/* LNVM treats address-spaces as silos, i.e. LBA and PBA are
 		 * equally large and zero-indexed. */
@@ -384,11 +419,11 @@ static int nvm_l2p_tbl_init(struct nvm_stor *s, u64 slba, u64 nlb,
 			return -EINVAL;
 		}
 
-		if (pba == U64_MAX)
+		if (!pba)
 			continue;
 
-		addr[i].addr = pba;
-		raddr[pba].addr = slba + i;
+		addr[i].addr = pba - 1;
+		raddr[pba - 1].addr = slba + i;
 	}
 	return 0;
 }

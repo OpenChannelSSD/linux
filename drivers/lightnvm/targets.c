@@ -167,13 +167,13 @@ static struct nvm_addr *nvm_map_page_rr(struct nvm_stor *s, sector_t l_addr,
 	p_block = ap->cur;
 	p_addr = nvm_alloc_phys_addr(p_block);
 
-	if (p_addr == LTOP_EMPTY) {
+	if (p_addr == ADDR_EMPTY) {
 		p_block = s->type->pool_get_blk(pool, 0);
 
 		if (!p_block) {
 			if (is_gc) {
 				p_addr = nvm_alloc_phys_addr(ap->gc_cur);
-				if (p_addr == LTOP_EMPTY) {
+				if (p_addr == ADDR_EMPTY) {
 					p_block = s->type->pool_get_blk(pool, 1);
 					ap->gc_cur = p_block;
 					ap->gc_cur->ap = ap;
@@ -195,7 +195,7 @@ static struct nvm_addr *nvm_map_page_rr(struct nvm_stor *s, sector_t l_addr,
 	}
 
 finished:
-	if (p_addr == LTOP_EMPTY) {
+	if (p_addr == ADDR_EMPTY) {
 		mempool_free(p, s->addr_pool);
 		return NULL;
 	}

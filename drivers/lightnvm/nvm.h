@@ -34,7 +34,7 @@
 #endif
 
 #define NVM_MSG_PREFIX "nvm"
-#define LTOP_EMPTY -1
+#define ADDR_EMPTY (~0ULL)
 #define LTOP_POISON 0xD3ADB33F
 
 /*
