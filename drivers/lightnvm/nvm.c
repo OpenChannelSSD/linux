@@ -160,6 +160,11 @@ unsigned int nvm_cmd_size(void)
 }
 EXPORT_SYMBOL_GPL(nvm_cmd_size);
 
+static void nvm_aps_free(struct nvm_stor *s)
+{
+	kfree(s->aps);
+}
+
 static void nvm_pools_free(struct nvm_stor *s)
 {
 	struct nvm_pool *pool;
@@ -176,27 +181,25 @@ static void nvm_pools_free(struct nvm_stor *s)
 			break;
 		vfree(pool->blocks);
 	}
+
 	kfree(s->pools);
-	kfree(s->aps);
 }
 
 static int nvm_pools_init(struct nvm_stor *s)
 {
 	struct nvm_pool *pool;
-	struct nvm_block *block;
-	struct nvm_ap *ap;
 	struct nvm_id_chnl *chnl;
-	int i, j, cur_block_id = 0;
+	int i;
 
 	spin_lock_init(&s->rev_lock);
 
 	s->pools = kcalloc(s->nr_pools, sizeof(struct nvm_pool), GFP_KERNEL);
 	if (!s->pools)
-		goto err_pool;
+		return -ENOMEM;
 
 	nvm_for_each_pool(s, pool, i) {
 		chnl = &s->id.chnls[i];
-		pr_info("lightnvm: p %u qsize %llu gr %llu ge %llu begin %llu end %llu\n",
+		pr_info("lightnvm: p %u qsize %u gr %u ge %u begin %llu end %llu\n",
 			i, chnl->queue_size, chnl->gran_read, chnl->gran_erase,
 			chnl->laddr_begin, chnl->laddr_end);
 
@@ -212,22 +215,7 @@ static int nvm_pools_init(struct nvm_stor *s)
 				(chnl->laddr_end - chnl->laddr_begin + 1) /
 				(chnl->gran_erase / chnl->gran_read);
 
-		pool->blocks = vzalloc(sizeof(struct nvm_block) *
-							pool->nr_blocks);
-		if (!pool->blocks)
-			goto err_blocks;
-
-		pool_for_each_block(pool, block, j) {
-			spin_lock_init(&block->lock);
-			atomic_set(&block->gc_running, 0);
-			INIT_LIST_HEAD(&block->list);
-
-			block->pool = pool;
-			block->id = cur_block_id++;
-
-			list_add_tail(&block->list, &pool->free_list);
-		}
-
+		/* TODO: Global values derived from variable size pools */
 		s->total_blocks += pool->nr_blocks;
 		/* TODO: make blks per pool variable amond channels */
 		s->nr_blks_per_pool = pool->nr_free_blocks;
@@ -236,10 +224,57 @@ static int nvm_pools_init(struct nvm_stor *s)
 					(chnl->gran_read / s->sector_size);
 	}
 
+	/* we make room for each pool context. */
+	s->krqd_wq = alloc_workqueue("knvm-work", WQ_MEM_RECLAIM|WQ_UNBOUND,
+						s->nr_pools);
+	if (!s->krqd_wq)
+		return -ENOMEM;
+
+	s->kgc_wq = alloc_workqueue("knvm-gc", WQ_MEM_RECLAIM, 1);
+	if (!s->kgc_wq)
+		return -ENOMEM;
+
+	return 0;
+}
+
+static int nvm_blocks_init(struct nvm_stor *s)
+{
+	struct nvm_pool *pool;
+	struct nvm_block *block;
+	sector_t i, cur_block_id = 0;
+
+	nvm_for_each_pool(s, pool, i) {
+		pool->blocks = vzalloc(sizeof(struct nvm_block) *
+						pool->nr_blocks);
+		if (!pool->blocks)
+			return -ENOMEM;
+
+		pool_for_each_block(pool, block, i) {
+			spin_lock_init(&block->lock);
+			atomic_set(&block->gc_running, 0);
+			INIT_LIST_HEAD(&block->list);
+
+			block->pool = pool;
+			block->id = cur_block_id++;
+
+			/* Still free list? Let's look in the reverse map */
+			list_add_tail(&block->list, &pool->free_list);
+		}
+	}
+
+	return 0;
+}
+
+static int nvm_aps_init(struct nvm_stor *s)
+{
+	struct nvm_block *block;
+	struct nvm_ap *ap;
+	int i;
+
 	s->nr_aps = s->nr_aps_per_pool * s->nr_pools;
 	s->aps = kcalloc(s->nr_aps, sizeof(struct nvm_ap), GFP_KERNEL);
 	if (!s->aps)
-		goto err_blocks;
+		return -ENOMEM;;
 
 	nvm_for_each_ap(s, ap, i) {
 		spin_lock_init(&ap->lock);
@@ -254,31 +289,24 @@ static int nvm_pools_init(struct nvm_stor *s)
 		ap->gc_cur = block;
 	}
 
-	/* we make room for each pool context. */
-	s->krqd_wq = alloc_workqueue("knvm-work", WQ_MEM_RECLAIM|WQ_UNBOUND,
-						s->nr_pools);
-	if (!s->krqd_wq) {
-		pr_err("Couldn't alloc knvm-work");
-		goto err_blocks;
-	}
-
-	s->kgc_wq = alloc_workqueue("knvm-gc", WQ_MEM_RECLAIM, 1);
-	if (!s->kgc_wq) {
-		pr_err("Couldn't alloc knvm-gc");
-		goto err_blocks;
-	}
-
 	return 0;
-err_blocks:
-	nvm_pools_free(s);
-err_pool:
-	pr_err("lightnvm: cannot allocate lightnvm data structures");
-	return -ENOMEM;
 }
 
-static int nvm_stor_init(struct nvm_dev *dev, struct nvm_stor *s)
+static void nvm_stor_free(struct nvm_stor *s)
 {
-	int i;
+	percpu_ida_destroy(&s->free_inflight);
+	if (s->addr_pool)
+		mempool_destroy(s->addr_pool);
+	if (s->page_pool)
+		mempool_destroy(s->page_pool);
+	vfree(s->rev_trans_map);
+	vfree(s->trans_map);
+	kfree(s);
+}
+
+static int nvm_stor_map_init(struct nvm_stor *s)
+{
+	sector_t i;
 
 	s->trans_map = vzalloc(sizeof(struct nvm_addr) * s->nr_pages);
 	if (!s->trans_map)
@@ -287,7 +315,7 @@ static int nvm_stor_init(struct nvm_dev *dev, struct nvm_stor *s)
 	s->rev_trans_map = vmalloc(sizeof(struct nvm_rev_addr)
 							* s->nr_pages);
 	if (!s->rev_trans_map)
-		goto err_rev_trans_map;
+		return -ENOMEM;;
 
 	for (i = 0; i < s->nr_pages; i++) {
 		struct nvm_addr *p = &s->trans_map[i];
@@ -297,16 +325,29 @@ static int nvm_stor_init(struct nvm_dev *dev, struct nvm_stor *s)
 		r->addr = 0xDEADBEEF;
 	}
 
+	return 0;
+}
+
+static int nvm_stor_init(struct nvm_stor *s)
+{
+	int i;
+
+	s->nr_pools = s->id.nchannels;
+	s->nr_aps_per_pool = APS_PER_POOL;
+	s->config.gc_time = GC_TIME;
+	s->sector_size = EXPOSED_PAGE_SIZE;
+
 	s->page_pool = mempool_create_page_pool(MIN_POOL_PAGES, 0);
 	if (!s->page_pool)
-		goto err_dev_lookup;
+		return -ENOMEM;
 
 	s->addr_pool = mempool_create_slab_pool(64, _addr_cache);
 	if (!s->addr_pool)
-		goto err_page_pool;
+		return -ENOMEM;
 
 	/* inflight maintenance */
-	percpu_ida_init(&s->free_inflight, NVM_INFLIGHT_TAGS);
+	if (percpu_ida_init(&s->free_inflight, NVM_INFLIGHT_TAGS))
+		return -ENOMEM;
 
 	for (i = 0; i < NVM_INFLIGHT_PARTITIONS; i++) {
 		spin_lock_init(&s->inflight_map[i].lock);
@@ -316,45 +357,7 @@ static int nvm_stor_init(struct nvm_dev *dev, struct nvm_stor *s)
 	/* simple round-robin strategy */
 	atomic_set(&s->next_write_ap, -1);
 
-	s->dev = (void *)dev;
-	dev->stor = s;
-
-	/* Initialize pools. */
-
-	if (s->type->init && s->type->init(s))
-		goto err_addr_pool_tgt;
-
-	if (s->gc_ops->init && s->gc_ops->init(s))
-		goto err_addr_pool_gc;
-
-	/* FIXME: Clean up pool init on failure. */
-	setup_timer(&s->gc_timer, s->gc_ops->gc_timer, (unsigned long)s);
-	mod_timer(&s->gc_timer, jiffies + msecs_to_jiffies(1000));
-
 	return 0;
-err_addr_pool_gc:
-	s->type->exit(s);
-err_addr_pool_tgt:
-	nvm_pools_free(s);
-	mempool_destroy(s->addr_pool);
-err_page_pool:
-	mempool_destroy(s->page_pool);
-err_dev_lookup:
-	vfree(s->rev_trans_map);
-err_rev_trans_map:
-	vfree(s->trans_map);
-	return -ENOMEM;
-}
-
-#define NVM_TARGET_TYPE "rrpc"
-#define NVM_GC_TYPE "greedy"
-#define NVM_NUM_POOLS 8
-#define NVM_NUM_BLOCKS 256
-#define NVM_NUM_PAGES 256
-
-void nvm_free_nvm_id(struct nvm_id *id)
-{
-	kfree(id->chnls);
 }
 
 static int nvm_l2p_tbl_init(struct nvm_stor *s, u64 slba, u64 nlb,
@@ -390,6 +393,69 @@ static int nvm_l2p_tbl_init(struct nvm_stor *s, u64 slba, u64 nlb,
 	return 0;
 }
 
+void nvm_free_nvm_id(struct nvm_id *id)
+{
+	kfree(id->chnls);
+}
+
+static void nvm_free(struct nvm_dev *nvm)
+{
+	struct nvm_stor *s = nvm->stor;
+
+	s = nvm->stor;
+
+	if (!s)
+		return;
+
+	del_timer(&s->gc_timer);
+
+	nvm_aps_free(s);
+	/* also frees blocks */
+	nvm_pools_free(s);
+
+	if (s->gc_ops->exit)
+		s->gc_ops->exit(s);
+
+	if (s->type->exit)
+		s->type->exit(s);
+
+	nvm_free_nvm_id(&s->id);
+
+	nvm_stor_free(s);
+
+	down_write(&_lock);
+	if (_addr_cache)
+		kmem_cache_destroy(_addr_cache);
+	up_write(&_lock);
+}
+
+static int nvm_targets_init(struct nvm_stor *s)
+{
+	int ret;
+
+	nvm_register_target(&nvm_target_rrpc);
+
+	/* hardcode initialization values until user-space util is avail. */
+	s->type = &nvm_target_rrpc;
+	s->gc_ops = &nvm_gc_greedy;
+
+	if (s->type->init) {
+		ret = s->type->init(s);
+		if (ret)
+			goto done;
+	}
+
+	if (s->gc_ops->init) {
+		ret = s->gc_ops->init(s);
+		if (ret)
+			goto done;
+	}
+
+	setup_timer(&s->gc_timer, s->gc_ops->gc_timer, (unsigned long)s);
+done:
+	return ret;
+}
+
 int nvm_init(struct nvm_dev *nvm)
 {
 	struct nvm_stor *s;
@@ -410,56 +476,61 @@ int nvm_init(struct nvm_dev *nvm)
 	}
 	up_write(&_lock);
 
-	nvm_register_target(&nvm_target_rrpc);
-
 	s = kzalloc(sizeof(struct nvm_stor), GFP_KERNEL);
 	if (!s) {
 		ret = -ENOMEM;
-		goto err_stor;
+		goto err;
 	}
 
-	/* hardcode initialization values until user-space util is avail. */
-	s->type = &nvm_target_rrpc;
-	if (!s->type) {
-		pr_err("nvm: %s doesn't exist.", NVM_TARGET_TYPE);
-		ret = -EINVAL;
-		goto err_cfg;
-	}
-
-	s->gc_ops = &nvm_gc_greedy;
-	if (!s->gc_ops) {
-		pr_err("nvm: %s doesn't exist.", NVM_GC_TYPE);
-		ret = -EINVAL;
-		goto err_cfg;
-	}
+	nvm->stor = s;
+	s->dev = (void *)nvm;
 
 	/* TODO: We're limited to the same setup for each channel */
 	if (nvm->ops->identify(nvm->q, &s->id)) {
 		ret = -EINVAL;
-		goto err_cfg;
+		goto err;
 	}
 
 	pr_debug("lightnvm dev: ver %u type %u chnls %u\n",
 			s->id.ver_id, s->id.nvm_type, s->id.nchannels);
 
-	s->nr_pools = s->id.nchannels;
-	s->nr_aps_per_pool = APS_PER_POOL;
-	s->config.gc_time = GC_TIME;
-	s->sector_size = EXPOSED_PAGE_SIZE;
+	ret = nvm_stor_init(s);
+	if (ret)
+		goto err;
 
 	ret = nvm_pools_init(s);
-	if (ret) {
-		pr_err("lightnvm: cannot initialized pools structure.");
-		goto err_init;
-	}
+	if (ret)
+		goto err;
 
+	/* s->nr_pages_per_blk obtained from nvm_pools_init */
+	if (s->nr_pages_per_blk > MAX_INVALID_PAGES_STORAGE * BITS_PER_LONG) {
+		pr_err("lightnvm: Number of pages per block too high. Increase MAX_INVALID_PAGES_STORAGE.");
+		ret = -EINVAL;
+		goto err;
+	}
 	s->nr_pages = s->nr_pools * s->nr_blks_per_pool * s->nr_pages_per_blk;
 
-	if (s->nr_pages_per_blk > MAX_INVALID_PAGES_STORAGE * BITS_PER_LONG) {
-		pr_err("lightnvm: Num. pages per block too high. Increase MAX_INVALID_PAGES_STORAGE.");
-		ret = -EINVAL;
-		goto err_init;
+	ret = nvm_stor_map_init(s);
+	if (ret)
+		goto err;
+
+	ret = nvm->ops->get_l2p_tbl(nvm->q, 0, s->nr_pages, nvm_l2p_tbl_init, s);
+	if (ret) {
+		pr_err("lightnvm: cannot read L2P table.");
+		goto err;
 	}
+
+	ret = nvm_blocks_init(s);
+	if (ret)
+		goto err;
+
+	ret = nvm_targets_init(s);
+	if (ret)
+		goto err;
+
+	ret = nvm_aps_init(s);
+	if (ret)
+		goto err;
 
 	pr_info("lightnvm: allocating %lu physical pages (%lu KB)\n",
 			s->nr_pages, s->nr_pages * s->sector_size / 1024);
@@ -468,32 +539,14 @@ int nvm_init(struct nvm_dev *nvm)
 	pr_info("lightnvm: append points per pool: %u\n", s->nr_aps_per_pool);
 	pr_info("lightnvm: target sector size=%d\n", s->sector_size);
 	pr_info("lightnvm: append points: %u\n", s->nr_aps);
-
-	ret = nvm_stor_init(nvm, s);
-	if (ret) {
-		pr_err("lightnvm: cannot initialize nvm structure.");
-		goto err_init;
-	}
-
-	/* calculated within nvm_stor_init */
 	pr_info("lightnvm: pages per block: %u\n", s->nr_pages_per_blk);
 
-	ret = nvm->ops->get_l2p_tbl(nvm->q, 0, s->nr_pages, nvm_l2p_tbl_init, s);
-	if (ret) {
-		pr_err("lightnvm: cannot read L2P table.");
-		goto err_init;
-	}
+	/* Enable garbage collection timer */
+	mod_timer(&s->gc_timer, jiffies + msecs_to_jiffies(1000));
 
-	nvm->stor = s;
 	return 0;
-
-err_init:
-	nvm_free_nvm_id(&s->id);
-err_cfg:
-	kfree(s);
-err_stor:
-	kmem_cache_destroy(_addr_cache);
 err:
+	nvm_free(nvm);
 	pr_err("lightnvm: failed to initialize nvm\n");
 	return ret;
 }
@@ -501,36 +554,8 @@ EXPORT_SYMBOL_GPL(nvm_init);
 
 void nvm_exit(struct nvm_dev *nvm)
 {
-	struct nvm_stor *s;
-
-	s = nvm->stor;
-	if (!s)
-		return;
-
-	if (s->gc_ops->exit)
-		s->gc_ops->exit(s);
-
-	if (s->type->exit)
-		s->type->exit(s);
-
-	del_timer(&s->gc_timer);
-
 	/* TODO: remember outstanding block refs, waiting to be erased... */
-	nvm_pools_free(s);
-
-	vfree(s->trans_map);
-	vfree(s->rev_trans_map);
-
-	mempool_destroy(s->page_pool);
-	mempool_destroy(s->addr_pool);
-
-	percpu_ida_destroy(&s->free_inflight);
-
-	nvm_free_nvm_id(&s->id);
-
-	kfree(s);
-
-	kmem_cache_destroy(_addr_cache);
+	nvm_free(nvm);
 
 	pr_info("lightnvm: successfully unloaded\n");
 }
