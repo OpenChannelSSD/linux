@@ -241,15 +241,15 @@ static int nvm_blocks_init(struct nvm_stor *s)
 {
 	struct nvm_pool *pool;
 	struct nvm_block *block;
-	sector_t i, cur_block_id = 0;
+	sector_t pool_iter, block_iter, cur_block_id = 0;
 
-	nvm_for_each_pool(s, pool, i) {
+	nvm_for_each_pool(s, pool, pool_iter) {
 		pool->blocks = vzalloc(sizeof(struct nvm_block) *
 						pool->nr_blocks);
 		if (!pool->blocks)
 			return -ENOMEM;
 
-		pool_for_each_block(pool, block, i) {
+		pool_for_each_block(pool, block, block_iter) {
 			spin_lock_init(&block->lock);
 			atomic_set(&block->gc_running, 0);
 			INIT_LIST_HEAD(&block->list);
