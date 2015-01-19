@@ -448,10 +448,10 @@ static void nvm_free(struct nvm_dev *nvm)
 	/* also frees blocks */
 	nvm_pools_free(s);
 
-	if (s->gc_ops->exit)
+	if (s->gc_ops && s->gc_ops->exit)
 		s->gc_ops->exit(s);
 
-	if (s->type->exit)
+	if (s->type && s->type->exit)
 		s->type->exit(s);
 
 	nvm_free_nvm_id(&s->id);
