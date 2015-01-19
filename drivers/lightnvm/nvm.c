@@ -522,6 +522,7 @@ int nvm_init(struct nvm_dev *nvm)
 
 	/* TODO: We're limited to the same setup for each channel */
 	if (nvm->ops->identify(nvm->q, &s->id)) {
+		pr_err("lightnvm: device could not be identified\n");
 		ret = -EINVAL;
 		goto err;
 	}
@@ -530,42 +531,54 @@ int nvm_init(struct nvm_dev *nvm)
 			s->id.ver_id, s->id.nvm_type, s->id.nchannels);
 
 	ret = nvm_stor_init(s);
-	if (ret)
+	if (ret) {
+		pr_err("lightnvm: could not initialize core structure.\n");
 		goto err;
+	}
 
 	ret = nvm_pools_init(s);
-	if (ret)
+	if (ret) {
+		pr_err("lightnvm: could not initialize pools\n");
 		goto err;
+	}
 
 	/* s->nr_pages_per_blk obtained from nvm_pools_init */
 	if (s->nr_pages_per_blk > MAX_INVALID_PAGES_STORAGE * BITS_PER_LONG) {
-		pr_err("lightnvm: Number of pages per block too high. Increase MAX_INVALID_PAGES_STORAGE.");
+		pr_err("lightnvm: number of pages per block too high. Increase MAX_INVALID_PAGES_STORAGE.");
 		ret = -EINVAL;
 		goto err;
 	}
 	s->nr_pages = s->nr_pools * s->nr_blks_per_pool * s->nr_pages_per_blk;
 
 	ret = nvm_stor_map_init(s);
-	if (ret)
+	if (ret) {
+		pr_err("lightnvm: could not initialize nvm maps\n");
 		goto err;
+	}
 
 	ret = nvm->ops->get_l2p_tbl(nvm->q, 0, s->nr_pages, nvm_l2p_tbl_init, s);
 	if (ret) {
-		pr_err("lightnvm: cannot read L2P table.");
+		pr_err("lightnvm: could not read L2P table.\n");
 		goto err;
 	}
 
 	ret = nvm_blocks_init(s);
-	if (ret)
+	if (ret) {
+		pr_err("lightnvm: could not initialize blocks\n");
 		goto err;
+	}
 
 	ret = nvm_targets_init(s);
-	if (ret)
+	if (ret) {
+		pr_err("lightnvm: could not initialize target\n");
 		goto err;
+	}
 
 	ret = nvm_aps_init(s);
-	if (ret)
+	if (ret) {
+		pr_err("lightnvm: could not initialize append points\n");
 		goto err;
+	}
 
 	pr_info("lightnvm: allocating %lu physical pages (%lu KB)\n",
 			s->nr_pages, s->nr_pages * s->sector_size / 1024);
