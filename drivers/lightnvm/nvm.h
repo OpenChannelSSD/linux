@@ -22,7 +22,6 @@
 #include <linux/kref.h>
 #include <linux/completion.h>
 #include <linux/hashtable.h>
-#include <linux/percpu_ida.h>
 #include <linux/lightnvm.h>
 #include <linux/blk-mq.h>
 #include <linux/slab.h>
@@ -58,7 +57,6 @@
 /* We partition the namespace of translation map into these pieces for tracking
  * in-flight addresses. */
 #define NVM_INFLIGHT_PARTITIONS 8
-#define NVM_INFLIGHT_TAGS 256
 
 /* Pool descriptions */
 struct nvm_block {
@@ -157,7 +155,6 @@ struct nvm_inflight_request {
 	struct list_head list;
 	sector_t l_start;
 	sector_t l_end;
-	int tag;
 };
 
 struct nvm_inflight {
@@ -312,12 +309,8 @@ struct nvm_stor {
 
 	struct timer_list gc_timer;
 
-	/* in-flight data lookup, lookup by logical address. Remember the
-	 * overhead of cachelines being used. Keep it low for better cache
-	 * utilization. */
-	struct percpu_ida free_inflight;
 	struct nvm_inflight inflight_map[NVM_INFLIGHT_PARTITIONS];
-	struct nvm_inflight_request inflight_addrs[NVM_INFLIGHT_TAGS];
+	struct nvm_inflight_request *inflight_addrs;
 
 	/* nvm module specific data */
 	void *private;
@@ -474,15 +467,15 @@ static inline int request_intersects(struct nvm_inflight_request *r,
 }
 
 /* lock a range within a single inflight list (=> within a single block) */
-static void __nvm_lock_rq_sgmt(struct nvm_stor *s, struct nvm_inflight *inflight,
-			int spin, sector_t laddr_start, unsigned nsectors)
+static void __nvm_lock_rq_sgmt(struct nvm_stor *s,
+			       struct nvm_inflight *inflight, int spin,
+			       sector_t laddr_start, unsigned nsectors,
+			       int rq_tag)
 {
 	struct nvm_inflight_request *r;
 	sector_t laddr_end = laddr_start + nsectors - 1;
 	unsigned long flags;
-	int tag;
 
-	tag = percpu_ida_alloc(&s->free_inflight, TASK_RUNNING);
 retry:
 	spin_lock_irqsave(&inflight->lock, flags);
 
@@ -507,65 +500,38 @@ retry:
 		}
 	}
 
-	r = &s->inflight_addrs[tag];
+	r = &s->inflight_addrs[rq_tag];
 
 	r->l_start = laddr_start;
 	r->l_end = laddr_end;
-	r->tag = tag;
 
 	list_add_tail(&r->list, &inflight->reqs);
 	spin_unlock_irqrestore(&inflight->lock, flags);
-	/* pr_err("%s: \tlocked sgmt_range{start:%zu, end:%zu}\n", __func__,
-			r->l_start, r->l_end); */
 }
 
-static inline unsigned incr_iflight_ndx(unsigned curr_ndx)
-{
-	if (unlikely(++curr_ndx == NVM_INFLIGHT_PARTITIONS))
-		return 0;
-
-	return curr_ndx;
-}
-
-static void __nvm_lock_laddr_range(struct nvm_stor *s, int spin,
-					sector_t laddr, unsigned nsectors)
+static void __nvm_lock_laddr_range(struct nvm_stor *s, int spin, sector_t laddr,
+				   unsigned nsectors, int rq_tag)
 {
 	struct nvm_inflight *inflight;
-	sector_t blk_laddr;
-	unsigned blk_id, map_ndx;
 
 	NVM_ASSERT(nsectors >= 1);
 	BUG_ON((laddr + nsectors) > s->nr_pages);
 
-	blk_id = laddr / s->nr_pages_per_blk;
-	blk_laddr = blk_id * s->nr_pages_per_blk;
-	map_ndx = blk_id % NVM_INFLIGHT_PARTITIONS;
-	inflight = &s->inflight_map[map_ndx];
-
-	while (nsectors) {
-		/*TODO: optimize? off can only be non-zero on first iteration*/
-		unsigned off = laddr - blk_laddr;
-		unsigned segment_len = min(s->nr_pages_per_blk - off, nsectors);
-
-		__nvm_lock_rq_sgmt(s, inflight, spin, laddr, segment_len);
-
-		laddr += segment_len;
-		blk_id++;
-		blk_laddr += s->nr_pages_per_blk;
-		nsectors -= segment_len;
-		map_ndx = incr_iflight_ndx(map_ndx);
-		inflight = &s->inflight_map[map_ndx];
-	}
+	inflight = &s->inflight_map[laddr % NVM_INFLIGHT_PARTITIONS];
+	__nvm_lock_rq_sgmt(s, inflight, spin, laddr, nsectors, rq_tag);
 }
 
-static inline void nvm_lock_laddr_range(struct nvm_stor *s, sector_t laddr_start,
-					unsigned int nsectors)
+static inline void nvm_lock_laddr_range(struct nvm_stor *s,
+					sector_t laddr_start,
+					unsigned int nsectors,
+					int rq_tag)
 {
-	return __nvm_lock_laddr_range(s, 0, laddr_start, nsectors);
+	return __nvm_lock_laddr_range(s, 0, laddr_start, nsectors, rq_tag);
 }
 
-static void __nvm_unlock_rq_sgmt(struct nvm_stor *s, struct nvm_inflight *inflight,
-				sector_t laddr_start, unsigned int nsectors)
+static void __nvm_unlock_rq_sgmt(struct nvm_inflight *inflight,
+				 sector_t laddr_start, unsigned int nsectors,
+				 int rq_tag)
 {
 	sector_t laddr_end = laddr_start + nsectors - 1;
 	struct nvm_inflight_request *r = NULL;
@@ -573,13 +539,10 @@ static void __nvm_unlock_rq_sgmt(struct nvm_stor *s, struct nvm_inflight *inflig
 
 	spin_lock_irqsave(&inflight->lock, flags);
 	BUG_ON(list_empty(&inflight->reqs));
+
 	list_for_each_entry(r, &inflight->reqs, list)
-	{
-		/* pr_err("%s: \tunlocked sgmt_range{start:%zu, end:%zu}\n",
-				__func__, r->l_start, r->l_end); */
 		if (request_equals(r, laddr_start, laddr_end))
 			break;
-	}
 
 	/* On bug -> The submission size and complete size properly differs */
 	BUG_ON(!r || !request_equals(r, laddr_start, laddr_end));
@@ -588,38 +551,18 @@ static void __nvm_unlock_rq_sgmt(struct nvm_stor *s, struct nvm_inflight *inflig
 
 	list_del_init(&r->list);
 	spin_unlock_irqrestore(&inflight->lock, flags);
-	percpu_ida_free(&s->free_inflight, r->tag);
 }
 
 static inline void nvm_unlock_laddr_range(struct nvm_stor *s, sector_t laddr,
-					unsigned int nsectors)
+					  unsigned int nsectors, int rq_tag)
 {
 	struct nvm_inflight *inflight;
-	sector_t blk_laddr;
-	unsigned blk_id, map_ndx;
 
 	NVM_ASSERT(nsectors >= 1);
 	BUG_ON((laddr + nsectors) > s->nr_pages);
 
-	blk_id = laddr / s->nr_pages_per_blk;
-	blk_laddr = blk_id * s->nr_pages_per_blk;
-	map_ndx = blk_id % NVM_INFLIGHT_PARTITIONS;
-	inflight = &s->inflight_map[map_ndx];
-
-	while (nsectors) {
-		/*TODO: optimize? off can only be non-zero on first iteration*/
-		unsigned off = laddr - blk_laddr;
-		unsigned sgmt_len = min(s->nr_pages_per_blk - off, nsectors);
-
-		__nvm_unlock_rq_sgmt(s, inflight, laddr, sgmt_len);
-
-		laddr += sgmt_len;
-		blk_id++;
-		blk_laddr += s->nr_pages_per_blk;
-		nsectors -= sgmt_len;
-		map_ndx = incr_iflight_ndx(map_ndx);
-		inflight = &s->inflight_map[map_ndx];
-	}
+	inflight = &s->inflight_map[laddr % NVM_INFLIGHT_PARTITIONS];
+	__nvm_unlock_rq_sgmt(inflight, laddr, nsectors, rq_tag);
 }
 #endif /* NVM_H_ */
 

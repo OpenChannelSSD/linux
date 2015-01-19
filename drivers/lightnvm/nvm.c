@@ -109,18 +109,9 @@ int nvm_discard_rq(struct nvm_dev *dev, struct request *rq)
 	sector_t l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
 	struct nvm_stor *s = dev->stor;
 
-	while (npages > 0)
-	{
-		sector_t cur_pages = min_t(sector_t,
-						npages, NVM_INFLIGHT_TAGS / 2);
-
-		nvm_lock_laddr_range(s, l_addr, cur_pages);
-		nvm_invalidate_range(s, l_addr, cur_pages);
-		nvm_unlock_laddr_range(s, l_addr, cur_pages);
-
-		l_addr += cur_pages;
-		npages -= cur_pages;
-	}
+	nvm_lock_laddr_range(s, l_addr, npages, rq->tag);
+	nvm_invalidate_range(s, l_addr, npages);
+	nvm_unlock_laddr_range(s, l_addr, npages, rq->tag);
 
 	rq->cmd_flags |= REQ_NVM;
 	blk_mq_end_request(rq, 0);
@@ -329,7 +320,8 @@ static int nvm_aps_init(struct nvm_stor *s)
 
 static void nvm_stor_free(struct nvm_stor *s)
 {
-	percpu_ida_destroy(&s->free_inflight);
+	if (s->inflight_addrs)
+		kfree(s->inflight_addrs);
 	if (s->addr_pool)
 		mempool_destroy(s->addr_pool);
 	if (s->page_pool)
@@ -363,7 +355,7 @@ static int nvm_stor_map_init(struct nvm_stor *s)
 	return 0;
 }
 
-static int nvm_stor_init(struct nvm_stor *s)
+static int nvm_stor_init(struct nvm_stor *s, int max_qdepth)
 {
 	int i;
 
@@ -380,14 +372,15 @@ static int nvm_stor_init(struct nvm_stor *s)
 	if (!s->addr_pool)
 		return -ENOMEM;
 
-	/* inflight maintenance */
-	if (percpu_ida_init(&s->free_inflight, NVM_INFLIGHT_TAGS))
-		return -ENOMEM;
-
 	for (i = 0; i < NVM_INFLIGHT_PARTITIONS; i++) {
 		spin_lock_init(&s->inflight_map[i].lock);
 		INIT_LIST_HEAD(&s->inflight_map[i].reqs);
 	}
+
+	s->inflight_addrs = kmalloc(max_qdepth *
+			sizeof(struct nvm_inflight_request), GFP_KERNEL);
+	if (!s->inflight_addrs)
+		return -ENOMEM;
 
 	/* simple round-robin strategy */
 	atomic_set(&s->next_write_ap, -1);
@@ -494,6 +487,8 @@ done:
 int nvm_init(struct nvm_dev *nvm)
 {
 	struct nvm_stor *s;
+	int max_qdepth;
+	struct blk_mq_tag_set *tag_set = nvm->q->tag_set;
 	int ret = 0;
 
 	if (!nvm->q || !nvm->ops)
@@ -527,10 +522,13 @@ int nvm_init(struct nvm_dev *nvm)
 		goto err;
 	}
 
-	pr_debug("lightnvm dev: ver %u type %u chnls %u\n",
-			s->id.ver_id, s->id.nvm_type, s->id.nchannels);
+	max_qdepth = tag_set->queue_depth * tag_set->nr_hw_queues;
 
-	ret = nvm_stor_init(s);
+	pr_debug("lightnvm dev: ver %u type %u chnls %u max qdepth: %i\n",
+			s->id.ver_id, s->id.nvm_type, s->id.nchannels,
+			max_qdepth);
+
+	ret = nvm_stor_init(s, max_qdepth);
 	if (ret) {
 		pr_err("lightnvm: could not initialize core structure.\n");
 		goto err;

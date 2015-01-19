@@ -135,7 +135,7 @@ void nvm_endio(struct nvm_dev *nvm_dev, struct request *rq, int err)
 
 	/* pr_debug("p: %p s: %llu l: %u pp:%p e:%u (%u)\n",
 			p, p->addr, pb->l_addr, p, err, rq_data_dir(rq)); */
-	nvm_unlock_laddr_range(s, pb->l_addr, 1);
+	nvm_unlock_laddr_range(s, pb->l_addr, 1, rq->tag);
 
 	if (rq_data_dir(rq) == WRITE) {
 		/* maintain data in buffer until block is full */
@@ -182,11 +182,11 @@ int nvm_read_rq(struct nvm_stor *s, struct request *rq)
 
 	l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
 
-	nvm_lock_laddr_range(s, l_addr, npages);
+	nvm_lock_laddr_range(s, l_addr, npages, rq->tag);
 
 	p = s->type->lookup_ltop(s, l_addr);
 	if (!p) {
-		nvm_unlock_laddr_range(s, l_addr, npages);
+		nvm_unlock_laddr_range(s, l_addr, npages, rq->tag);
 		s->gc_ops->kick(s);
 		return NVM_RQ_ERR_BUSY;
 	}
@@ -207,11 +207,11 @@ int __nvm_write_rq(struct nvm_stor *s, struct request *rq, int is_gc)
 	sector_t l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
 	struct nvm_addr *p;
 
-	nvm_lock_laddr_range(s, l_addr, npages);
+	nvm_lock_laddr_range(s, l_addr, npages, rq->tag);
 	p = s->type->map_page(s, l_addr, is_gc);
 	if (!p) {
 		BUG_ON(is_gc);
-		nvm_unlock_laddr_range(s, l_addr, npages);
+		nvm_unlock_laddr_range(s, l_addr, npages, rq->tag);
 		s->gc_ops->kick(s);
 
 		return NVM_RQ_ERR_BUSY;
