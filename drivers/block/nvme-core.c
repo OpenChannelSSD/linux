@@ -1526,7 +1526,7 @@ static int nvme_nvm_id(struct request_queue *q, struct nvm_id *nvm_id)
 		goto out;
 	}
 
-	nvm_id->ver_id = le16_to_cpu(ctrl->ver_id);
+	nvm_id->ver_id = ctrl->ver_id;
 	nvm_id->nvm_type = ctrl->nvm_type;
 	nvm_id->nchannels = le16_to_cpu(ctrl->nchannels);
 
