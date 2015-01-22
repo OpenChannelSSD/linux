@@ -534,23 +534,21 @@ static void __nvm_unlock_rq_sgmt(struct nvm_inflight *inflight,
 				 int rq_tag)
 {
 	sector_t laddr_end = laddr_start + nsectors - 1;
-	struct nvm_inflight_request *r = NULL;
+	struct nvm_inflight_request *r = NULL, *next;
 	unsigned long flags;
 
-	spin_lock_irqsave(&inflight->lock, flags);
-	BUG_ON(list_empty(&inflight->reqs));
-
-	list_for_each_entry(r, &inflight->reqs, list)
+	list_for_each_entry_safe(r, next, &inflight->reqs, list)
 		if (request_equals(r, laddr_start, laddr_end))
 			break;
 
-	/* On bug -> The submission size and complete size properly differs */
-	BUG_ON(!r || !request_equals(r, laddr_start, laddr_end));
+	BUG_ON(!r);
 
-	r->l_start = r->l_end = LTOP_POISON;
-
+	spin_lock_irqsave(&inflight->lock, flags);
 	list_del_init(&r->list);
 	spin_unlock_irqrestore(&inflight->lock, flags);
+
+	/* On bug -> The submission size and complete size properly differs */
+	r->l_start = r->l_end = LTOP_POISON;
 }
 
 static inline void nvm_unlock_laddr_range(struct nvm_stor *s, sector_t laddr,
