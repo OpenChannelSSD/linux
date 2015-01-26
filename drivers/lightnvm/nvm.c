@@ -437,15 +437,15 @@ static void nvm_free(struct nvm_dev *nvm)
 
 	del_timer(&s->gc_timer);
 
-	nvm_aps_free(s);
-	/* also frees blocks */
-	nvm_pools_free(s);
-
 	if (s->gc_ops && s->gc_ops->exit)
 		s->gc_ops->exit(s);
 
 	if (s->type && s->type->exit)
 		s->type->exit(s);
+
+	nvm_aps_free(s);
+	/* also frees blocks */
+	nvm_pools_free(s);
 
 	nvm_free_nvm_id(&s->id);
 
