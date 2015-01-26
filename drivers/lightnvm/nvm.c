@@ -109,9 +109,9 @@ int nvm_discard_rq(struct nvm_dev *dev, struct request *rq)
 	sector_t l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
 	struct nvm_stor *s = dev->stor;
 
-	nvm_lock_laddr_range(s, l_addr, npages, rq->tag);
+	nvm_lock_rq(s, rq);
 	nvm_invalidate_range(s, l_addr, npages);
-	nvm_unlock_laddr_range(s, l_addr, npages, rq->tag);
+	nvm_unlock_rq(s, rq);
 
 	rq->cmd_flags |= REQ_NVM;
 	blk_mq_end_request(rq, 0);
@@ -373,8 +373,9 @@ static int nvm_stor_init(struct nvm_stor *s, int max_qdepth)
 		return -ENOMEM;
 
 	for (i = 0; i < NVM_INFLIGHT_PARTITIONS; i++) {
-		spin_lock_init(&s->inflight_map[i].lock);
-		INIT_LIST_HEAD(&s->inflight_map[i].reqs);
+		struct nvm_inflight *map = &s->inflight_map[i];
+		spin_lock_init(&map->lock);
+		INIT_LIST_HEAD(&map->reqs);
 	}
 
 	s->inflight_addrs = kmalloc(max_qdepth *
