@@ -614,8 +614,10 @@ void blk_unregister_queue(struct gendisk *disk)
 	if (WARN_ON(!q))
 		return;
 
-	if (q->nvm)
+	if (q->nvm) {
 		blk_lightnvm_unregister(q);
+		blk_lightnvm_remove_sysfs(disk_to_dev(disk));
+	}
 
 	if (q->mq_ops)
 		blk_mq_unregister_disk(disk);
@@ -625,7 +627,6 @@ void blk_unregister_queue(struct gendisk *disk)
 
 	kobject_uevent(&q->kobj, KOBJ_REMOVE);
 	kobject_del(&q->kobj);
-	blk_lightnvm_remove_sysfs(disk_to_dev(disk));
 	blk_trace_remove_sysfs(disk_to_dev(disk));
 	kobject_put(&disk_to_dev(disk)->kobj);
 }
