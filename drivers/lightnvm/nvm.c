@@ -83,7 +83,7 @@ void nvm_unregister_target(struct nvm_target_type *tt)
 	up_write(&_lock);
 }
 
-int nvm_map_rq(struct nvm_dev *dev, struct request *rq)
+int __nvm_map_rq(struct nvm_dev *dev, struct request *rq)
 {
 	struct nvm_stor *s = dev->stor;
 	int ret;
@@ -118,7 +118,7 @@ int nvm_discard_rq(struct nvm_dev *dev, struct request *rq)
 	return NVM_RQ_PROCESSED;
 }
 
-int nvm_process_rq(struct nvm_dev *dev, struct request *rq)
+int nvm_map_rq(struct nvm_dev *dev, struct request *rq)
 {
 	if (unlikely(rq->cmd_flags & REQ_NVM_MAPPED)) {
 		pr_err("lightnvm: attempting to map already mapped request\n");
@@ -128,9 +128,9 @@ int nvm_process_rq(struct nvm_dev *dev, struct request *rq)
 	if (rq->cmd_flags & REQ_DISCARD)
 		return nvm_discard_rq(dev, rq);
 
-	return nvm_map_rq(dev, rq);
+	return __nvm_map_rq(dev, rq);
 }
-EXPORT_SYMBOL_GPL(nvm_process_rq);
+EXPORT_SYMBOL_GPL(nvm_map_rq);
 
 void nvm_complete_request(struct nvm_dev *nvm_dev, struct request *rq, int error)
 {

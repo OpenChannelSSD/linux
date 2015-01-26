@@ -1158,7 +1158,7 @@ static inline int blk_mq_lightnvm_map(struct request *rq)
 {
 	struct request_queue *q = rq->q;
 
-	return (blk_queue_lightnvm(q) && blk_lightnvm_handle(q->nvm, rq));
+	return (blk_queue_lightnvm(q) && blk_lightnvm_map_rq(q->nvm, rq));
 }
 
 static inline bool blk_mq_merge_queue_io(struct blk_mq_hw_ctx *hctx,
