@@ -462,12 +462,12 @@ static void __nvm_lock_laddr(struct nvm_stor *s, sector_t laddr,
 	sector_t laddr_end = laddr + pages - 1;
 
 retry:
-	spin_lock(&map->lock);
+	spin_lock_irq(&map->lock);
 
 	list_for_each_entry(r, &map->reqs, list) {
 		if (unlikely(request_intersects(r, laddr, laddr_end))) {
 			/* existing, overlapping request, come back later */
-			spin_unlock(&map->lock);
+			spin_unlock_irq(&map->lock);
 			if (!do_spin) {
 				/*
 				 * blk-mq runs in non-preemptible mode after it
@@ -491,7 +491,7 @@ retry:
 	r->l_end = laddr_end;
 
 	list_add_tail(&r->list, &map->reqs);
-	spin_unlock(&map->lock);
+	spin_unlock_irq(&map->lock);
 }
 
 static void inline nvm_lock_laddr(struct nvm_stor *s, sector_t laddr,
