@@ -133,8 +133,6 @@ void nvm_endio(struct nvm_dev *nvm_dev, struct request *rq, int err)
 	struct nvm_block *block = p->block;
 	unsigned int data_cnt;
 
-	/* pr_debug("p: %p s: %llu l: %u pp:%p e:%u (%u)\n",
-			p, p->addr, pb->l_addr, p, err, rq_data_dir(rq)); */
 	nvm_unlock_rq(s, rq);
 
 	if (rq_data_dir(rq) == WRITE) {
