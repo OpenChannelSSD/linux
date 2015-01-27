@@ -155,6 +155,7 @@ struct nvm_inflight_request {
 	struct list_head list;
 	sector_t l_start;
 	sector_t l_end;
+	struct nvm_inflight *map;
 };
 
 struct nvm_inflight {
@@ -489,6 +490,8 @@ retry:
 
 	r->l_start = laddr;
 	r->l_end = laddr_end;
+	BUG_ON(r->map != NULL);
+	r->map = map;
 
 	list_add_tail(&r->list, &map->reqs);
 	spin_unlock_irq(&map->lock);
@@ -514,16 +517,15 @@ static inline void nvm_unlock_laddr(struct nvm_stor *s, sector_t laddr,
 			     unsigned int pages, int rq_tag)
 {
 	struct nvm_inflight_request *r = &s->inflight_addrs[rq_tag];
-	struct nvm_inflight *map =
-			&s->inflight_map[laddr % NVM_INFLIGHT_PARTITIONS];
+	struct nvm_inflight *map = r->map;
 	unsigned long flags;
 
 	spin_lock_irqsave(&map->lock, flags);
 	list_del_init(&r->list);
 	spin_unlock_irqrestore(&map->lock, flags);
 
-	/* On bug -> The submission size and complete size properly differs */
 	r->l_start = r->l_end = LTOP_POISON;
+	r->map = NULL;
 }
 
 static inline void nvm_unlock_rq(struct nvm_stor *s, struct request *rq)
