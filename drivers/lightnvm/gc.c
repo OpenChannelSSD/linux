@@ -230,14 +230,12 @@ static void nvm_greedy_pool_gc(struct work_struct *work)
 	struct nvm_pool *pool = gpool->pool;
 	struct nvm_stor *s = pool->s;
 	unsigned int nr_blocks_need;
-	unsigned long flags;
 
 	nr_blocks_need = pool->nr_blocks / GC_LIMIT_INVERSE;
 
 	if (nr_blocks_need < s->nr_aps)
 		nr_blocks_need = s->nr_aps;
 
-	local_irq_save(flags);
 	spin_lock(&pool->lock);
 	while (nr_blocks_need > pool->nr_free_blocks &&
 					!list_empty(&gpool->prio_list)) {
@@ -260,7 +258,6 @@ static void nvm_greedy_pool_gc(struct work_struct *work)
 		nr_blocks_need--;
 	}
 	spin_unlock(&pool->lock);
-	local_irq_restore(flags);
 
 	/* TODO: Hint that request queue can be started again */
 }
