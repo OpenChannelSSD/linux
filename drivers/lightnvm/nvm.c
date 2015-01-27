@@ -378,7 +378,7 @@ static int nvm_stor_init(struct nvm_stor *s, int max_qdepth)
 		INIT_LIST_HEAD(&map->reqs);
 	}
 
-	s->inflight_addrs = kmalloc(max_qdepth *
+	s->inflight_addrs = kzalloc(max_qdepth *
 			sizeof(struct nvm_inflight_request), GFP_KERNEL);
 	if (!s->inflight_addrs)
 		return -ENOMEM;
