@@ -113,7 +113,8 @@ void nvm_move_valid_pages(struct nvm_stor *s, struct nvm_block *block)
 		}
 
 		/* unlocked by nvm_submit_bio nvm_endio */
-		nvm_lock_laddr(s, rev->addr, 1, src_rq->tag, 1);
+		nvm_lock_laddr(s, rev->addr, 1,
+					nvm_get_inflight_rq(s->dev, src_rq), 1);
 		spin_unlock(&s->rev_lock);
 
 		nvm_setup_rq(s, src_rq, &src, rev->addr, NVM_RQ_GC);
@@ -136,7 +137,8 @@ void nvm_move_valid_pages(struct nvm_stor *s, struct nvm_block *block)
 		src_bio->bi_iter.bi_sector = nvm_get_sector(rev->addr);
 
 		/* again, unlocked by nvm_endio */
-		nvm_lock_laddr(s, rev->addr, 1, dst_rq->tag, 1);
+		nvm_lock_laddr(s, rev->addr, 1,
+					nvm_get_inflight_rq(s->dev, dst_rq), 1);
 
 		spin_unlock(&s->rev_lock);
 

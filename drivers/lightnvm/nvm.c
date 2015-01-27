@@ -320,8 +320,6 @@ static int nvm_aps_init(struct nvm_stor *s)
 
 static void nvm_stor_free(struct nvm_stor *s)
 {
-	if (s->inflight_addrs)
-		kfree(s->inflight_addrs);
 	if (s->addr_pool)
 		mempool_destroy(s->addr_pool);
 	if (s->page_pool)
@@ -377,11 +375,6 @@ static int nvm_stor_init(struct nvm_stor *s, int max_qdepth)
 		spin_lock_init(&map->lock);
 		INIT_LIST_HEAD(&map->reqs);
 	}
-
-	s->inflight_addrs = kzalloc(max_qdepth *
-			sizeof(struct nvm_inflight_request), GFP_KERNEL);
-	if (!s->inflight_addrs)
-		return -ENOMEM;
 
 	/* simple round-robin strategy */
 	atomic_set(&s->next_write_ap, -1);

@@ -151,11 +151,10 @@ struct nvm_config {
 	unsigned int gc_time; /* GC every X microseconds */
 };
 
-struct nvm_inflight_request {
+struct nvm_inflight_rq {
 	struct list_head list;
 	sector_t l_start;
 	sector_t l_end;
-	struct nvm_inflight *map;
 };
 
 struct nvm_inflight {
@@ -311,7 +310,6 @@ struct nvm_stor {
 	struct timer_list gc_timer;
 
 	struct nvm_inflight inflight_map[NVM_INFLIGHT_PARTITIONS];
-	struct nvm_inflight_request *inflight_addrs;
 
 	/* nvm module specific data */
 	void *private;
@@ -334,6 +332,7 @@ enum {
 };
 
 struct per_rq_data {
+	struct nvm_inflight_rq inflight_rq;
 	struct nvm_addr *addr;
 	unsigned int flags;
 };
@@ -445,7 +444,7 @@ static inline void *get_per_rq_data(struct nvm_dev *dev, struct request *rq)
 	return blk_mq_rq_to_pdu(rq) + dev->drv_cmd_size;
 }
 
-static inline int request_intersects(struct nvm_inflight_request *r,
+static inline int request_intersects(struct nvm_inflight_rq *r,
 				sector_t laddr_start, sector_t laddr_end)
 {
 	return (laddr_end >= r->l_start && laddr_end <= r->l_end) &&
@@ -462,19 +461,28 @@ static inline sector_t nvm_get_sector(sector_t laddr)
 	return laddr * NR_PHY_IN_LOG;
 }
 
-static void __nvm_lock_laddr(struct nvm_stor *s, sector_t laddr,
-			     unsigned pages, int rq_tag, int do_spin)
+static inline struct nvm_inflight_rq *nvm_get_inflight_rq(struct nvm_dev *dev,
+							   struct request *rq)
 {
-	struct nvm_inflight_request *r;
+	struct per_rq_data *pd = get_per_rq_data(dev, rq);
+
+	return &pd->inflight_rq;
+}
+
+static void __nvm_lock_laddr(struct nvm_stor *s, sector_t laddr,
+			     unsigned pages, struct nvm_inflight_rq *r,
+			     int do_spin)
+{
 	struct nvm_inflight *map =
 			&s->inflight_map[laddr % NVM_INFLIGHT_PARTITIONS];
 	sector_t laddr_end = laddr + pages - 1;
+	struct nvm_inflight_rq *rtmp;
 
 retry:
 	spin_lock_irq(&map->lock);
 
-	list_for_each_entry(r, &map->reqs, list) {
-		if (unlikely(request_intersects(r, laddr, laddr_end))) {
+	list_for_each_entry(rtmp, &map->reqs, list) {
+		if (unlikely(request_intersects(rtmp, laddr, laddr_end))) {
 			/* existing, overlapping request, come back later */
 			spin_unlock_irq(&map->lock);
 			if (!do_spin) {
@@ -494,60 +502,52 @@ retry:
 		}
 	}
 
-	r = &s->inflight_addrs[rq_tag];
-
-	if(r->map != NULL)
-	{
-		printk("%llu %llu -> %llu %llu  \n", laddr, laddr_end, r->l_start, r->l_end);
-		BUG();
-	}
 	r->l_start = laddr;
 	r->l_end = laddr_end;
-	r->map = map;
 
 	list_add_tail(&r->list, &map->reqs);
 	spin_unlock_irq(&map->lock);
 }
 
 static void inline nvm_lock_laddr(struct nvm_stor *s, sector_t laddr,
-				   unsigned pages, int rq_tag, int do_spin)
+				  unsigned pages,
+				  struct nvm_inflight_rq *r, int do_spin)
 {
 	BUG_ON((laddr + pages) > s->nr_pages);
 
-	__nvm_lock_laddr(s, laddr, pages, rq_tag, do_spin);
+	__nvm_lock_laddr(s, laddr, pages, r, do_spin);
 }
 
 static inline void nvm_lock_rq(struct nvm_stor *s, struct request *rq)
 {
 	sector_t laddr = nvm_get_laddr(rq);
 	unsigned int pages = blk_rq_bytes(rq) / EXPOSED_PAGE_SIZE;
+	struct nvm_inflight_rq *r = nvm_get_inflight_rq(s->dev, rq);
 
-	return nvm_lock_laddr(s, laddr, pages, rq->tag, 0);
+	return nvm_lock_laddr(s, laddr, pages, r, 0);
 }
 
 static inline void nvm_unlock_laddr(struct nvm_stor *s, sector_t laddr,
-			     unsigned int pages, int rq_tag)
+				    struct nvm_inflight_rq *r)
 {
-	struct nvm_inflight_request *r = &s->inflight_addrs[rq_tag];
-	struct nvm_inflight *map = r->map;
+	struct nvm_inflight *map =
+			&s->inflight_map[laddr % NVM_INFLIGHT_PARTITIONS];
 	unsigned long flags;
 
 	spin_lock_irqsave(&map->lock, flags);
 	list_del_init(&r->list);
 	spin_unlock_irqrestore(&map->lock, flags);
-
-	r->l_start = r->l_end = LTOP_POISON;
-	r->map = NULL;
 }
 
 static inline void nvm_unlock_rq(struct nvm_stor *s, struct request *rq)
 {
 	sector_t laddr = nvm_get_laddr(rq);
 	unsigned int pages = blk_rq_bytes(rq) / EXPOSED_PAGE_SIZE;
+	struct nvm_inflight_rq *r = nvm_get_inflight_rq(s->dev, rq);
 
 	BUG_ON((laddr + pages) > s->nr_pages);
 
-	nvm_unlock_laddr(s, laddr, pages, rq->tag);
+	nvm_unlock_laddr(s, laddr, r);
 }
 #endif /* NVM_H_ */
 
