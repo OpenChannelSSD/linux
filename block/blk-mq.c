@@ -760,6 +760,18 @@ static void flush_busy_ctxs(struct blk_mq_hw_ctx *hctx, struct list_head *list)
 	}
 }
 
+static int blk_mq_lightnvm_map(struct request *rq)
+{
+	struct request_queue *q = rq->q;
+
+	if (blk_queue_lightnvm(q) && blk_lightnvm_map_rq(q->nvm, rq)) {
+		pr_err("lightnvm: mapping failed.");
+		return 1;
+	}
+
+	return 0;
+}
+
 /*
  * Run this hardware queue, pulling any software queues mapped to it in.
  * Note that this function currently has various problems around ordering
@@ -818,6 +830,13 @@ static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 		bd.rq = rq;
 		bd.list = dptr;
 		bd.last = list_empty(&rq_list);
+
+		if (blk_mq_lightnvm_map(rq))
+		{
+			rq->errors = -EIO;
+			blk_mq_end_request(rq, rq->errors);
+			break;
+		}
 
 		ret = q->mq_ops->queue_rq(hctx, &bd);
 		switch (ret) {
@@ -1154,21 +1173,12 @@ static inline bool hctx_allow_merges(struct blk_mq_hw_ctx *hctx)
 		!blk_queue_nomerges(hctx->queue);
 }
 
-static inline int blk_mq_lightnvm_map(struct request *rq)
-{
-	struct request_queue *q = rq->q;
-
-	return (blk_queue_lightnvm(q) && blk_lightnvm_map_rq(q->nvm, rq));
-}
-
 static inline bool blk_mq_merge_queue_io(struct blk_mq_hw_ctx *hctx,
 					 struct blk_mq_ctx *ctx,
 					 struct request *rq, struct bio *bio)
 {
 	if (!hctx_allow_merges(hctx)) {
 		blk_mq_bio_to_request(rq, bio);
-		if (blk_mq_lightnvm_map(rq))
-			return false;
 		spin_lock(&ctx->lock);
 insert_rq:
 		__blk_mq_insert_request(hctx, rq, false);
@@ -1282,8 +1292,12 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 		int ret;
 
 		blk_mq_bio_to_request(rq, bio);
-		if (blk_mq_lightnvm_map(rq))
+
+		if (blk_mq_lightnvm_map(rq)) {
+			rq->errors = -EIO;
+			blk_mq_end_request(rq, rq->errors);
 			goto done;
+		}
 
 		/*
 		 * For OK queue, we are done. For error, kill it. Any other
@@ -1367,8 +1381,6 @@ static void blk_sq_make_request(struct request_queue *q, struct bio *bio)
 
 		if (plug) {
 			blk_mq_bio_to_request(rq, bio);
-			if (blk_mq_lightnvm_map(rq))
-				goto done;
 			if (list_empty(&plug->mq_list))
 				trace_block_plug(q);
 			else if (request_count >= BLK_MAX_REQUEST_COUNT) {
@@ -1391,7 +1403,7 @@ static void blk_sq_make_request(struct request_queue *q, struct bio *bio)
 run_queue:
 		blk_mq_run_hw_queue(data.hctx, !is_sync || is_flush_fua);
 	}
-done:
+
 	blk_mq_put_ctx(data.ctx);
 }
 
