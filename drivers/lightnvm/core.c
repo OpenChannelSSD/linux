@@ -156,7 +156,6 @@ void nvm_endio(struct nvm_dev *nvm_dev, struct request *rq, int err)
 void nvm_setup_rq(struct nvm_stor *s, struct request *rq, struct nvm_addr *p,
 		  sector_t l_addr, unsigned int flags)
 {
-	struct nvm_block *block = p->block;
 	struct per_rq_data *pb;
 
 	pb = get_per_rq_data(s->dev, rq);
