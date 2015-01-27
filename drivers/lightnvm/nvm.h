@@ -334,9 +334,7 @@ enum {
 };
 
 struct per_rq_data {
-	struct nvm_ap *ap;
 	struct nvm_addr *addr;
-	sector_t l_addr;
 	unsigned int flags;
 };
 
@@ -498,9 +496,13 @@ retry:
 
 	r = &s->inflight_addrs[rq_tag];
 
+	if(r->map != NULL)
+	{
+		printk("%llu %llu -> %llu %llu  \n", laddr, laddr_end, r->l_start, r->l_end);
+		BUG();
+	}
 	r->l_start = laddr;
 	r->l_end = laddr_end;
-	BUG_ON(r->map != NULL);
 	r->map = map;
 
 	list_add_tail(&r->list, &map->reqs);

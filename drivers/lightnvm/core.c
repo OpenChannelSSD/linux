@@ -159,18 +159,10 @@ void nvm_setup_rq(struct nvm_stor *s, struct request *rq, struct nvm_addr *p,
 		  sector_t l_addr, unsigned int flags)
 {
 	struct nvm_block *block = p->block;
-	struct nvm_ap *ap;
 	struct per_rq_data *pb;
 
-	if (block)
-		ap = block_to_ap(s, block);
-	else
-		ap = &s->aps[0];
-
 	pb = get_per_rq_data(s->dev, rq);
-	pb->ap = ap;
 	pb->addr = p;
-	pb->l_addr = l_addr;
 	pb->flags = flags;
 }
 
