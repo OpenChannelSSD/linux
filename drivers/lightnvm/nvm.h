@@ -454,6 +454,16 @@ static inline int request_intersects(struct nvm_inflight_request *r,
 		(laddr_start >= r->l_start && laddr_start <= r->l_end);
 }
 
+static inline sector_t nvm_get_laddr(struct request *rq)
+{
+	return blk_rq_pos(rq) / NR_PHY_IN_LOG;
+}
+
+static inline sector_t nvm_get_sector(sector_t laddr)
+{
+	return laddr * NR_PHY_IN_LOG;
+}
+
 static void __nvm_lock_laddr(struct nvm_stor *s, sector_t laddr,
 			     unsigned pages, int rq_tag, int do_spin)
 {
@@ -507,7 +517,7 @@ static void inline nvm_lock_laddr(struct nvm_stor *s, sector_t laddr,
 
 static inline void nvm_lock_rq(struct nvm_stor *s, struct request *rq)
 {
-	sector_t laddr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
+	sector_t laddr = nvm_get_laddr(rq);
 	unsigned int pages = blk_rq_bytes(rq) / EXPOSED_PAGE_SIZE;
 
 	return nvm_lock_laddr(s, laddr, pages, rq->tag, 0);
@@ -530,7 +540,7 @@ static inline void nvm_unlock_laddr(struct nvm_stor *s, sector_t laddr,
 
 static inline void nvm_unlock_rq(struct nvm_stor *s, struct request *rq)
 {
-	sector_t laddr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
+	sector_t laddr = nvm_get_laddr(rq);
 	unsigned int pages = blk_rq_bytes(rq) / EXPOSED_PAGE_SIZE;
 
 	BUG_ON((laddr + pages) > s->nr_pages);

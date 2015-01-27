@@ -78,7 +78,7 @@ void nvm_move_valid_pages(struct nvm_stor *s, struct nvm_block *block)
 			pr_err("nvm: failed to alloc gc bio request");
 			break;
 		}
-		src_bio->bi_iter.bi_sector = src.addr * NR_PHY_IN_LOG;
+		src_bio->bi_iter.bi_sector = nvm_get_sector(src.addr);
 		page = mempool_alloc(s->page_pool, GFP_NOIO);
 
 		/* TODO: may fail when EXP_PG_SIZE > PAGE_SIZE */
@@ -133,7 +133,7 @@ void nvm_move_valid_pages(struct nvm_stor *s, struct nvm_block *block)
 			goto overwritten;
 		}
 
-		src_bio->bi_iter.bi_sector = rev->addr * NR_PHY_IN_LOG;
+		src_bio->bi_iter.bi_sector = nvm_get_sector(rev->addr);
 
 		/* again, unlocked by nvm_endio */
 		nvm_lock_laddr(s, rev->addr, 1, dst_rq->tag, 1);

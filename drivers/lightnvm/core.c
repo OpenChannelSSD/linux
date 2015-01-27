@@ -177,7 +177,7 @@ void nvm_setup_rq(struct nvm_stor *s, struct request *rq, struct nvm_addr *p,
 int nvm_read_rq(struct nvm_stor *s, struct request *rq)
 {
 	struct nvm_addr *p;
-	sector_t l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
+	sector_t l_addr = nvm_get_laddr(rq);
 
 	nvm_lock_rq(s, rq);
 
@@ -189,18 +189,17 @@ int nvm_read_rq(struct nvm_stor *s, struct request *rq)
 	}
 
 	if (p->block)
-		rq->phys_sector = p->addr * NR_PHY_IN_LOG +
+		rq->phys_sector = nvm_get_sector(p->addr) +
 					(blk_rq_pos(rq) % NR_PHY_IN_LOG);
 
 	nvm_setup_rq(s, rq, p, l_addr, NVM_RQ_NONE);
-	//printk("nvm: R{LBA:%llu,sec:%llu}\n", p->addr, p->addr * NR_PHY_IN_LOG);
 	return NVM_RQ_OK;
 }
 
 int __nvm_write_rq(struct nvm_stor *s, struct request *rq, int is_gc)
 {
 	struct nvm_addr *p;
-	sector_t l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
+	sector_t l_addr = nvm_get_laddr(rq);
 
 	nvm_lock_rq(s, rq);
 	p = s->type->map_page(s, l_addr, is_gc);
@@ -212,9 +211,7 @@ int __nvm_write_rq(struct nvm_stor *s, struct request *rq, int is_gc)
 		return NVM_RQ_ERR_BUSY;
 	}
 
-	rq->phys_sector = p->addr * NR_PHY_IN_LOG;
-	/*printk("nvm: W %llu(%llu) B: %u\n", p->addr, p->addr * NR_PHY_IN_LOG,
-			p->block->id);*/
+	rq->phys_sector = nvm_get_sector(p->addr);
 
 	nvm_setup_rq(s, rq, p, l_addr, NVM_RQ_NONE);
 
