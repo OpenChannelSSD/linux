@@ -1,7 +1,6 @@
 #ifndef LIGHTNVM_H
 #define LIGHTNVM_H
 
-#include <uapi/linux/lightnvm.h>
 #include <linux/types.h>
 #include <linux/blk-mq.h>
 #include <linux/genhd.h>
