@@ -94,7 +94,7 @@ typedef int (nvm_set_rsp_fn)(struct request_queue *q, u8 rsp, u8 val);
 typedef int (nvm_get_l2p_tbl_fn)(struct request_queue *q, u64 slba, u64 nlb,
 						nvm_l2p_tbl_init_fn *init_cb,
 						struct nvm_stor *s);
-typedef int (nvm_erase_blk_fn)(struct nvm_dev *, sector_t);
+typedef int (nvm_erase_blk_fn)(struct request_queue *, sector_t);
 
 struct lightnvm_dev_ops {
 	nvm_id_fn		*identify;
@@ -102,7 +102,7 @@ struct lightnvm_dev_ops {
 	nvm_set_rsp_fn		*set_responsibility;
 	nvm_get_l2p_tbl_fn	*get_l2p_tbl;
 
-	nvm_erase_blk_fn	*nvm_erase_block;
+	nvm_erase_blk_fn	*erase_block;
 };
 
 struct nvm_dev {

@@ -151,8 +151,8 @@ int nvm_erase_block(struct nvm_stor *s, struct nvm_block *block)
 {
 	struct nvm_dev *dev = s->dev;
 
-	if (dev->ops->nvm_erase_block)
-		return dev->ops->nvm_erase_block(dev, block->id);
+	if (dev->ops->erase_block)
+		return dev->ops->erase_block(dev->q, block->id);
 
 	return 0;
 }
