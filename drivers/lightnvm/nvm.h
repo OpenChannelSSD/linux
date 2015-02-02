@@ -231,26 +231,6 @@ struct nvm_gc_type {
 	nvm_gc_exit_fn *exit;
 };
 
-struct kv_entry;
-
-struct nvmkv_tbl {
-	u8 bucket_len;
-	u64 tbl_len;
-	struct kv_entry *entries;
-	spinlock_t lock;
-};
-
-struct nvmkv_inflight {
-	struct kmem_cache *entry_pool;
-	spinlock_t lock;
-	struct list_head list;
-};
-
-struct nvmkv {
-	struct nvmkv_tbl tbl;
-	struct nvmkv_inflight inflight;
-};
-
 /* Main structure */
 struct nvm_stor {
 	struct nvm_dev *dev;
@@ -315,17 +295,6 @@ struct nvm_stor {
 	struct nvm_config config;
 
 	unsigned int per_rq_offset;
-
-	struct nvmkv kv;
-};
-
-struct per_rq_data_nvm {
-	struct nvm_dev *dev;
-};
-
-enum {
-	NVM_RQ_NONE = 0,
-	NVM_RQ_GC = 1,
 };
 
 struct per_rq_data {
@@ -349,17 +318,12 @@ void nvm_invalidate_range(struct nvm_stor *s, sector_t slba, unsigned len);
 void nvm_set_ap_cur(struct nvm_ap *, struct nvm_block *);
 sector_t nvm_alloc_phys_addr(struct nvm_block *);
 
-/*   Naive implementations */
-void nvm_delayed_bio_submit(struct work_struct *);
-void nvm_deferred_bio_submit(struct work_struct *);
-
 /* Allocation of physical addresses from block
  * when increasing responsibility. */
 struct nvm_addr *nvm_alloc_addr_from_ap(struct nvm_ap *, int is_gc);
 
 /*   I/O request related */
 int nvm_write_rq(struct nvm_stor *, struct request *);
-int __nvm_write_rq(struct nvm_stor *, struct request *, int);
 int nvm_read_rq(struct nvm_stor *, struct request *rq);
 int nvm_erase_block(struct nvm_stor *, struct nvm_block *);
 void nvm_update_map(struct nvm_stor *, sector_t, struct nvm_addr *, int);
@@ -368,15 +332,6 @@ void nvm_update_map(struct nvm_stor *, sector_t, struct nvm_addr *, int);
 void nvm_reset_block(struct nvm_block *);
 
 void nvm_endio(struct nvm_dev *, struct request *, int);
-
-/* targets.c */
-struct nvm_block *nvm_lun_get_block(struct nvm_lun *, int is_gc);
-
-/* nvmkv.c */
-int nvmkv_init(struct nvm_stor *s, unsigned long size);
-void nvmkv_exit(struct nvm_stor *s);
-int nvmkv_unpack(struct nvm_dev *dev, struct lightnvm_cmd_kv __user *ucmd);
-void nvm_lun_put_block(struct nvm_block *);
 
 #define nvm_for_each_lun(n, lun, i) \
 		for ((i) = 0, lun = &(n)->luns[0]; \
