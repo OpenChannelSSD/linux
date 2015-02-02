@@ -53,11 +53,6 @@ enum {
 	__NVM_RQ_ERR_MAPPED,	/* already mapped */
 };
 
-#define NVM_RQ_OK		(__NVM_RQ_OK)
-#define NVM_RQ_PROCESSED	(1U << __NVM_RQ_PROCESSED)
-#define NVM_RQ_ERR_BUSY		(1U << __NVM_RQ_ERR_BUSY)
-#define NVM_RQ_ERR_MAPPED	(1U << __NVM_RQ_ERR_MAPPED)
-
 struct nvm_id_chnl {
 	u64	laddr_begin;
 	u64	laddr_end;

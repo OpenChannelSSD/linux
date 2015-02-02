@@ -825,25 +825,18 @@ static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 		rq = list_first_entry(&rq_list, struct request, queuelist);
 		list_del_init(&rq->queuelist);
 
-		ret = blk_mq_lightnvm_map(rq);
-		if (unlikely(ret))
-		{
-			if (ret == NVM_RQ_PROCESSED)
-				continue;
-
-			rq->errors = -EIO;
-			blk_mq_end_request(rq, rq->errors);
-			break;
-		}
-
 		bd.rq = rq;
 		bd.list = dptr;
 		bd.last = list_empty(&rq_list);
 
-		ret = q->mq_ops->queue_rq(hctx, &bd);
+		ret = blk_mq_lightnvm_map(rq);
+		if (likely(!ret))
+			ret = q->mq_ops->queue_rq(hctx, &bd);
 		switch (ret) {
 		case BLK_MQ_RQ_QUEUE_OK:
 			queued++;
+			continue;
+		case BLK_MQ_RQ_QUEUE_DONE:
 			continue;
 		case BLK_MQ_RQ_QUEUE_BUSY:
 			list_add(&rq->queuelist, &rq_list);
@@ -1295,26 +1288,19 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 
 		blk_mq_bio_to_request(rq, bio);
 
-		ret = blk_mq_lightnvm_map(rq);
-		if (unlikely(ret))
-		{
-			if (ret == NVM_RQ_PROCESSED)
-				goto done;
-
-			rq->errors = -EIO;
-			blk_mq_end_request(rq, rq->errors);
-			goto done;
-		}
-
 		/*
 		 * For OK queue, we are done. For error, kill it. Any other
 		 * error (busy), just add it to our list as we previously
 		 * would have done
 		 */
-		ret = q->mq_ops->queue_rq(data.hctx, &bd);
+		ret = blk_mq_lightnvm_map(rq);
+		if (likely(!ret))
+			ret = q->mq_ops->queue_rq(data.hctx, &bd);
 		if (ret == BLK_MQ_RQ_QUEUE_OK)
 			goto done;
 		else {
+			if (ret == BLK_MQ_RQ_QUEUE_DONE)
+				goto done;
 			__blk_mq_requeue_request(rq);
 
 			if (ret == BLK_MQ_RQ_QUEUE_ERROR) {

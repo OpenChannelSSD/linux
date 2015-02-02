@@ -21,7 +21,7 @@ struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc)
 	spin_lock_irqsave(&pool->lock, flags);
 
 	if (list_empty(&pool->free_list)) {
-		pr_err_ratelimited("Pool have no free pages available");
+		pr_err_ratelimited("lightnvm: pool %u have no free pages available", pool->id);
 		spin_unlock_irqrestore(&pool->lock, flags);
 		goto out;
 	}
@@ -78,20 +78,7 @@ struct nvm_addr *nvm_lookup_ltop(struct nvm_stor *s, sector_t l_addr)
 	p->addr = gp->addr;
 	p->block = gp->block;
 
-	/* if it has not been written, p is initialized to 0. */
-	if (p->block) {
-		/* during gc, the mapping will be updated accordently. We
-		 * therefore stop submitting new reads to the address, until it
-		 * is copied to the new place. */
-		if (atomic_read(&p->block->gc_running))
-			goto err;
-	}
-
 	return p;
-err:
-	mempool_free(p, s->addr_pool);
-	return NULL;
-
 }
 
 static inline unsigned int nvm_rq_sectors(const struct request *rq)
@@ -175,12 +162,12 @@ static struct nvm_addr *nvm_map_page_rr(struct nvm_stor *s, sector_t l_addr,
 				p_addr = nvm_alloc_phys_addr(ap->gc_cur);
 				if (p_addr == ADDR_EMPTY) {
 					p_block = s->type->pool_get_blk(pool, 1);
-					ap->gc_cur = p_block;
-					ap->gc_cur->ap = ap;
 					if (!p_block) {
-						pr_err("nvm: no more blocks");
+						pr_err("lightnvm: no more blocks");
 						goto finished;
 					} else {
+						ap->gc_cur = p_block;
+						ap->gc_cur->ap = ap;
 						p_addr =
 						nvm_alloc_phys_addr(ap->gc_cur);
 					}
@@ -195,10 +182,8 @@ static struct nvm_addr *nvm_map_page_rr(struct nvm_stor *s, sector_t l_addr,
 	}
 
 finished:
-	if (p_addr == ADDR_EMPTY) {
-		mempool_free(p, s->addr_pool);
-		return NULL;
-	}
+	if (p_addr == ADDR_EMPTY)
+		goto err;
 
 	p->addr = p_addr;
 	p->block = p_block;
@@ -210,6 +195,10 @@ finished:
 	if (p)
 		nvm_update_map(s, l_addr, p, is_gc);
 	return p;
+err:
+	spin_unlock(&ap->lock);
+	mempool_free(p, s->addr_pool);
+	return NULL;
 }
 
 /* none target type, round robin, page-based FTL, and cost-based GC */

@@ -115,14 +115,14 @@ int nvm_discard_rq(struct nvm_dev *dev, struct request *rq)
 
 	rq->cmd_flags |= REQ_NVM;
 	blk_mq_end_request(rq, 0);
-	return NVM_RQ_PROCESSED;
+	return BLK_MQ_RQ_QUEUE_DONE;
 }
 
 int nvm_map_rq(struct nvm_dev *dev, struct request *rq)
 {
 	if (unlikely(rq->cmd_flags & REQ_NVM_MAPPED)) {
 		pr_err("lightnvm: attempting to map already mapped request\n");
-		return NVM_RQ_ERR_MAPPED;
+		return BLK_MQ_RQ_QUEUE_ERROR;
 	}
 
 	if (rq->cmd_flags & REQ_DISCARD)
@@ -141,7 +141,11 @@ void nvm_complete_request(struct nvm_dev *nvm_dev, struct request *rq, int error
 		nvm_endio(nvm_dev, rq, error);
 
 	if (!(rq->cmd_flags & REQ_NVM))
+	{
+		if (rq->cmd_flags & REQ_NVM_NO_INFLIGHT)
+			BUG();
 		pr_info("lightnvm: request outside lightnvm detected.\n");
+	}
 }
 EXPORT_SYMBOL_GPL(nvm_complete_request);
 
@@ -275,7 +279,6 @@ static int nvm_blocks_init(struct nvm_stor *s)
 
 		pool_for_each_block(pool, block, block_iter) {
 			spin_lock_init(&block->lock);
-			atomic_set(&block->gc_running, 0);
 			INIT_LIST_HEAD(&block->list);
 
 			block->pool = pool;

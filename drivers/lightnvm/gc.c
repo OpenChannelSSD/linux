@@ -37,9 +37,17 @@ void nvm_gc_timer(unsigned long data)
 			jiffies + msecs_to_jiffies(s->config.gc_time));
 }
 
-/* Move data away from flash block to be erased. Additionally update the
- * l to p and p to l mappings. */
-/**
+static void nvm_end_sync_bio(struct bio *bio, int error)
+{
+	struct completion *waiting = bio->bi_private;
+
+	if (error)
+		pr_err("lightnvm: gc request failed.\n");
+
+	complete(waiting);
+}
+
+/*
  * nvm_move_valid_pages -- migrate live data off the block
  * @s: the 'nvm_stor' structure
  * @block: the block from which to migrate live pages
@@ -49,109 +57,91 @@ void nvm_gc_timer(unsigned long data)
  *   pages off the block prior to erasing it. This function blocks
  *   further execution until the operation is complete.
  */
-void nvm_move_valid_pages(struct nvm_stor *s, struct nvm_block *block)
+static int nvm_move_valid_pages(struct nvm_stor *s, struct nvm_block *block)
 {
 	struct nvm_dev *dev = s->dev;
 	struct request_queue *q = dev->q;
-	struct nvm_addr src;
 	struct nvm_rev_addr *rev;
-	struct bio *src_bio;
-	struct request *src_rq, *dst_rq = NULL;
+	struct bio *bio;
+	struct request *rq;
 	struct page *page;
 	int slot;
-	DECLARE_COMPLETION(sync);
+	sector_t phys_addr;
+	DECLARE_COMPLETION_ONSTACK(wait);
 
 	if (bitmap_full(block->invalid_pages, s->nr_pages_per_blk))
-		return;
+		return 0;
+
+	bio = bio_alloc(GFP_NOIO, 1);
+	if (!bio) {
+		pr_err("lightnvm: could not alloc bio on gc\n");
+		return -ENOMEM;
+	}
+
+	page = mempool_alloc(s->page_pool, GFP_NOIO);
 
 	while ((slot = find_first_zero_bit(block->invalid_pages,
 					   s->nr_pages_per_blk)) <
 						s->nr_pages_per_blk) {
-		/* Perform read */
-		src.addr = block_to_addr(block) + slot;
-		src.block = block;
 
-		BUG_ON(src.addr >= s->nr_pages);
+		/* Lock laddr */
+		phys_addr = block_to_addr(block) + slot;
 
-		src_bio = bio_alloc(GFP_NOIO, 1);
-		if (!src_bio) {
-			pr_err("nvm: failed to alloc gc bio request");
-			break;
+		spin_lock(&s->rev_lock);
+		/* Get logical address from physical to logical table */
+		rev = &s->rev_trans_map[phys_addr];
+		/* already updated by previous regular write */
+		if (rev->addr == LTOP_POISON) {
+			spin_unlock(&s->rev_lock);
+			continue;
 		}
-		src_bio->bi_iter.bi_sector = nvm_get_sector(src.addr);
-		page = mempool_alloc(s->page_pool, GFP_NOIO);
+
+		rq = nvm_inflight_laddr_acquire(s, rev->addr, 1, &s->rev_lock);
+		spin_unlock(&s->rev_lock);
+
+		/* Perform read to do GC */
+		bio->bi_iter.bi_sector = nvm_get_sector(rev->addr);
+		bio->bi_rw |= (READ | REQ_NVM_NO_INFLIGHT);
+		bio->bi_private = &wait;
+		bio->bi_end_io = nvm_end_sync_bio;
 
 		/* TODO: may fail when EXP_PG_SIZE > PAGE_SIZE */
-		bio_add_pc_page(q, src_bio, page, EXPOSED_PAGE_SIZE, 0);
+		bio_add_pc_page(q, bio, page, EXPOSED_PAGE_SIZE, 0);
 
-		src_rq = blk_mq_alloc_request(q, READ, GFP_KERNEL, false);
-		if (!src_rq) {
-			mempool_free(page, s->page_pool);
-			pr_err("nvm: failed to alloc gc request");
-			break;
-		}
+		/* execute read */
+		q->make_request_fn(q, bio);
+		wait_for_completion_io(&wait);
 
-		blk_init_request_from_bio(src_rq, src_bio);
+		/* and write it back */
+		bio_reset(bio);
+		reinit_completion(&wait);
 
-		/* We take the reverse lock here, and make sure that we only
-		 * release it when we have locked its logical address. If
-		 * another write on the same logical address is
-		 * occuring, we just let it stall the pipeline.
-		 *
-		 * We do this for both the read and write. Fixing it after each
-		 * IO.
-		 */
-		spin_lock(&s->rev_lock);
-		/* We use the physical address to go to the logical page addr,
-		 * and then update its mapping to its new place. */
-		rev = &s->rev_trans_map[src.addr];
+		bio->bi_iter.bi_sector = nvm_get_sector(rev->addr);
+		bio->bi_rw |= (WRITE | REQ_NVM_NO_INFLIGHT);
+		bio->bi_private = &wait;
+		bio->bi_end_io = nvm_end_sync_bio;
+		/* TODO: may fail when EXP_PG_SIZE > PAGE_SIZE */
+		bio_add_pc_page(q, bio, page, EXPOSED_PAGE_SIZE, 0);
 
-		/* already updated by previous regular write */
-		if (rev->addr == LTOP_POISON) {
-			spin_unlock(&s->rev_lock);
-			goto overwritten;
-		}
+		q->make_request_fn(q, bio);
+		wait_for_completion_io(&wait);
 
-		/* unlocked by nvm_submit_bio nvm_endio */
-		nvm_lock_laddr(s, rev->addr, 1,
-					nvm_get_inflight_rq(s->dev, src_rq), 1);
-		spin_unlock(&s->rev_lock);
+		nvm_inflight_laddr_release(s, rq);
 
-		nvm_setup_rq(s, src_rq, &src, rev->addr, NVM_RQ_GC);
-		blk_execute_rq(q, dev->disk, src_rq, 0);
-		blk_put_request(src_rq);
-
-		dst_rq = blk_mq_alloc_request(q, WRITE, GFP_KERNEL, false);
-		blk_init_request_from_bio(dst_rq, src_bio);
-
-		/* ok, now fix the write and make sure that it haven't been
-		 * moved in the meantime. */
-		spin_lock(&s->rev_lock);
-
-		/* already updated by previous regular write */
-		if (rev->addr == LTOP_POISON) {
-			spin_unlock(&s->rev_lock);
-			goto overwritten;
-		}
-
-		src_bio->bi_iter.bi_sector = nvm_get_sector(rev->addr);
-
-		/* again, unlocked by nvm_endio */
-		nvm_lock_laddr(s, rev->addr, 1,
-					nvm_get_inflight_rq(s->dev, dst_rq), 1);
-
-		spin_unlock(&s->rev_lock);
-
-		__nvm_write_rq(s, dst_rq, 1);
-		blk_execute_rq(q, dev->disk, dst_rq, 0);
-
-overwritten:
-		blk_put_request(dst_rq);
-		bio_put(src_bio);
-		mempool_free(page, s->page_pool);
+		/* reset structures for next run */
+		reinit_completion(&wait);
+		bio_reset(bio);
 	}
 
-	WARN_ON(!bitmap_full(block->invalid_pages, s->nr_pages_per_blk));
+	mempool_free(page, s->page_pool);
+	bio_put(bio);
+
+	if (!bitmap_full(block->invalid_pages, s->nr_pages_per_blk)) {
+		pr_err("lightnvm: failed to garbage collect block\n");
+		return -EIO;
+	}
+
+	return 0;
 }
 
 static inline struct greedy_pool *greedy_pool(struct nvm_pool *pool)
@@ -189,8 +179,10 @@ void nvm_greedy_block_gc(struct work_struct *work)
 	struct nvm_block *block = block_data->block;
 	struct nvm_stor *s = block->pool->s;
 
-	pr_debug("nvm: block '%d' being reclaimed now\n", block->id);
-	nvm_move_valid_pages(s, block);
+	pr_debug("lightnvm: block '%d' being reclaimed\n", block->id);
+	if (nvm_move_valid_pages(s, block))
+		return;
+
 	nvm_erase_block(s, block);
 	s->type->pool_put_blk(block);
 }
@@ -245,16 +237,16 @@ static void nvm_greedy_pool_gc(struct work_struct *work)
 		struct nvm_block *block = gblock->block;
 
 		if (!block->nr_invalid_pages) {
-			pr_err("nvm: no invalid pages");
+			//pr_err("nvm: no invalid pages");
 			break;
 		}
 
 		list_del_init(&gblock->prio);
 
 		BUG_ON(!block_is_full(block));
-		BUG_ON(atomic_inc_return(&block->gc_running) != 1);
 
-		pr_debug("nvm: selected block '%d' as GC victim\n", block->id);
+		pr_debug("lightnvm: selected block '%d' as GC victim\n",
+								block->id);
 		queue_work(s->kgc_wq, &gblock->ws_gc);
 
 		nr_blocks_need--;
@@ -312,7 +304,7 @@ static int nvm_greedy_init(struct nvm_stor *s)
 	pool_mem = kcalloc(s->nr_pools, sizeof(struct greedy_pool),
 						GFP_KERNEL);
 	if (!pool_mem) {
-		pr_err("nvm: failed allocating pools for greedy GC\n");
+		pr_err("lightnvm: failed allocating pools for greedy GC\n");
 		return -ENOMEM;
 	}
 

@@ -81,9 +81,6 @@ struct nvm_block {
 	/* Persistent data structures */
 	atomic_t data_cmnt_size; /* data pages committed to stable storage */
 
-	/* Block state handling */
-	atomic_t gc_running;
-
 	/* For target and GC algorithms  */
 	void *tgt_private;
 	void *gc_private;
@@ -343,7 +340,11 @@ void nvm_unregister_target(struct nvm_target_type *t);
 struct nvm_target_type *find_nvm_target_type(const char *name);
 
 /* core.c */
+struct request *nvm_inflight_laddr_acquire(struct nvm_stor *s, sector_t,
+						unsigned int, spinlock_t *);
+void nvm_inflight_laddr_release(struct nvm_stor *, struct request *);
 void nvm_invalidate_range(struct nvm_stor *s, sector_t slba, unsigned len);
+
 /*   Helpers */
 void nvm_set_ap_cur(struct nvm_ap *, struct nvm_block *);
 sector_t nvm_alloc_phys_addr(struct nvm_block *);
@@ -362,7 +363,6 @@ int __nvm_write_rq(struct nvm_stor *, struct request *, int);
 int nvm_read_rq(struct nvm_stor *, struct request *rq);
 int nvm_erase_block(struct nvm_stor *, struct nvm_block *);
 void nvm_update_map(struct nvm_stor *, sector_t, struct nvm_addr *, int);
-void nvm_setup_rq(struct nvm_stor *, struct request *, struct nvm_addr *, sector_t, unsigned int flags);
 
 /*   Block maintanence */
 void nvm_reset_block(struct nvm_block *);
@@ -469,36 +469,20 @@ static inline struct nvm_inflight_rq *nvm_get_inflight_rq(struct nvm_dev *dev,
 	return &pd->inflight_rq;
 }
 
-static void __nvm_lock_laddr(struct nvm_stor *s, sector_t laddr,
-			     unsigned pages, struct nvm_inflight_rq *r,
-			     int do_spin)
+static int __nvm_lock_laddr(struct nvm_stor *s, sector_t laddr,
+			     unsigned pages, struct nvm_inflight_rq *r)
 {
 	struct nvm_inflight *map =
 			&s->inflight_map[laddr % NVM_INFLIGHT_PARTITIONS];
 	sector_t laddr_end = laddr + pages - 1;
 	struct nvm_inflight_rq *rtmp;
 
-retry:
 	spin_lock_irq(&map->lock);
-
 	list_for_each_entry(rtmp, &map->reqs, list) {
 		if (unlikely(request_intersects(rtmp, laddr, laddr_end))) {
 			/* existing, overlapping request, come back later */
 			spin_unlock_irq(&map->lock);
-			if (!do_spin) {
-				/*
-				 * blk-mq runs in non-preemptible mode after it
-				 * has allocated a request. Release the CPU and
-				 * get it again, so we don't schedule in atomic
-				 * context. This seldom happens, we therefore
-				 * take the hit if the process isn't scheduled
-				 * on the same CPU.
-				 */
-				put_cpu();
-				schedule();
-				get_cpu();
-			}
-			goto retry;
+			return 1;
 		}
 	}
 
@@ -507,24 +491,28 @@ retry:
 
 	list_add_tail(&r->list, &map->reqs);
 	spin_unlock_irq(&map->lock);
+	return 0;
 }
 
-static void inline nvm_lock_laddr(struct nvm_stor *s, sector_t laddr,
+static int inline nvm_lock_laddr(struct nvm_stor *s, sector_t laddr,
 				  unsigned pages,
-				  struct nvm_inflight_rq *r, int do_spin)
+				  struct nvm_inflight_rq *r)
 {
 	BUG_ON((laddr + pages) > s->nr_pages);
 
-	__nvm_lock_laddr(s, laddr, pages, r, do_spin);
+	return __nvm_lock_laddr(s, laddr, pages, r);
 }
 
-static inline void nvm_lock_rq(struct nvm_stor *s, struct request *rq)
+static inline int nvm_lock_rq(struct nvm_stor *s, struct request *rq)
 {
 	sector_t laddr = nvm_get_laddr(rq);
 	unsigned int pages = blk_rq_bytes(rq) / EXPOSED_PAGE_SIZE;
 	struct nvm_inflight_rq *r = nvm_get_inflight_rq(s->dev, rq);
 
-	return nvm_lock_laddr(s, laddr, pages, r, 0);
+	if (rq->cmd_flags & REQ_NVM_NO_INFLIGHT)
+		return 0;
+
+	return nvm_lock_laddr(s, laddr, pages, r);
 }
 
 static inline void nvm_unlock_laddr(struct nvm_stor *s, sector_t laddr,
@@ -546,6 +534,9 @@ static inline void nvm_unlock_rq(struct nvm_stor *s, struct request *rq)
 	struct nvm_inflight_rq *r = nvm_get_inflight_rq(s->dev, rq);
 
 	BUG_ON((laddr + pages) > s->nr_pages);
+
+	if (rq->cmd_flags & REQ_NVM_NO_INFLIGHT)
+		return;
 
 	nvm_unlock_laddr(s, laddr, r);
 }

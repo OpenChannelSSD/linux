@@ -2,6 +2,39 @@
 #include <trace/events/block.h>
 #include "nvm.h"
 
+struct request *nvm_inflight_laddr_acquire(struct nvm_stor *s, sector_t laddr,
+					   unsigned int pages,
+					   spinlock_t *parent_lock)
+{
+	struct request *rq;
+	struct nvm_inflight_rq *inf;
+
+	rq = blk_mq_alloc_request(s->dev->q, READ, GFP_NOIO, false);
+	if (!rq)
+		return ERR_PTR(-ENOMEM);
+
+	inf = nvm_get_inflight_rq(s->dev, rq);
+	while (nvm_lock_laddr(s, laddr, pages, inf)) {
+		if (parent_lock)
+			spin_unlock(parent_lock);
+		schedule();
+		if (parent_lock)
+			spin_lock(parent_lock);
+	}
+
+	return rq;
+}
+
+void nvm_inflight_laddr_release(struct nvm_stor *s, struct request *rq)
+{
+	struct nvm_inflight_rq *inf;
+
+	inf = nvm_get_inflight_rq(s->dev, rq);
+	nvm_unlock_laddr(s, inf->l_start, inf);
+
+	blk_mq_free_request(rq);
+}
+
 static void invalidate_block_page(struct nvm_stor *s, struct nvm_addr *p)
 {
 	struct nvm_block *block = p->block;
@@ -76,7 +109,6 @@ void nvm_reset_block(struct nvm_block *block)
 	block->ap = NULL;
 	block->next_page = 0;
 	block->nr_invalid_pages = 0;
-	atomic_set(&block->gc_running, 0);
 	atomic_set(&block->data_cmnt_size, 0);
 	spin_unlock(&block->lock);
 }
@@ -146,21 +178,19 @@ void nvm_endio(struct nvm_dev *nvm_dev, struct request *rq, int err)
 
 	/* all submitted requests allocate their own addr,
 	 * except GC reads */
-	if (pb->flags & NVM_RQ_GC)
+	if (rq->cmd_flags & REQ_NVM_NO_INFLIGHT)
 		return;
 
 	mempool_free(pb->addr, s->addr_pool);
 }
 
 /* remember to lock l_add before calling nvm_submit_rq */
-void nvm_setup_rq(struct nvm_stor *s, struct request *rq, struct nvm_addr *p,
-		  sector_t l_addr, unsigned int flags)
+void nvm_setup_rq(struct nvm_stor *s, struct request *rq, struct nvm_addr *p)
 {
 	struct per_rq_data *pb;
 
 	pb = get_per_rq_data(s->dev, rq);
 	pb->addr = p;
-	pb->flags = flags;
 }
 
 int nvm_read_rq(struct nvm_stor *s, struct request *rq)
@@ -168,46 +198,46 @@ int nvm_read_rq(struct nvm_stor *s, struct request *rq)
 	struct nvm_addr *p;
 	sector_t l_addr = nvm_get_laddr(rq);
 
-	nvm_lock_rq(s, rq);
+	if (nvm_lock_rq(s, rq))
+		return BLK_MQ_RQ_QUEUE_BUSY;
 
 	p = s->type->lookup_ltop(s, l_addr);
 	if (!p) {
 		nvm_unlock_rq(s, rq);
-		s->gc_ops->kick(s);
-		return NVM_RQ_ERR_BUSY;
+		return BLK_MQ_RQ_QUEUE_BUSY;
 	}
 
 	if (p->block)
 		rq->phys_sector = nvm_get_sector(p->addr) +
 					(blk_rq_pos(rq) % NR_PHY_IN_LOG);
 
-	nvm_setup_rq(s, rq, p, l_addr, NVM_RQ_NONE);
-	return NVM_RQ_OK;
+	nvm_setup_rq(s, rq, p);
+	return BLK_MQ_RQ_QUEUE_OK;
 }
 
-int __nvm_write_rq(struct nvm_stor *s, struct request *rq, int is_gc)
+int nvm_write_rq(struct nvm_stor *s, struct request *rq)
 {
 	struct nvm_addr *p;
+	int is_gc = 0;
 	sector_t l_addr = nvm_get_laddr(rq);
 
-	nvm_lock_rq(s, rq);
+	if (rq->cmd_flags & REQ_NVM_NO_INFLIGHT)
+		is_gc = 1;
+
+	if (nvm_lock_rq(s, rq))
+		return BLK_MQ_RQ_QUEUE_BUSY;
+
 	p = s->type->map_page(s, l_addr, is_gc);
 	if (!p) {
 		BUG_ON(is_gc);
 		nvm_unlock_rq(s, rq);
 		s->gc_ops->kick(s);
-
-		return NVM_RQ_ERR_BUSY;
+		return BLK_MQ_RQ_QUEUE_BUSY;
 	}
 
 	rq->phys_sector = nvm_get_sector(p->addr);
 
-	nvm_setup_rq(s, rq, p, l_addr, NVM_RQ_NONE);
+	nvm_setup_rq(s, rq, p);
 
-	return NVM_RQ_OK;
-}
-
-int nvm_write_rq(struct nvm_stor *s, struct request *rq)
-{
-	return __nvm_write_rq(s, rq, 0);
+	return BLK_MQ_RQ_QUEUE_OK;
 }
