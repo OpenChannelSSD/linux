@@ -1,6 +1,6 @@
 #include "nvm.h"
 
-/* use pool_[get/put]_block to administer the blocks in use for each pool.
+/* use lun_[get/put]_block to administer the blocks in use for each lun.
  * Whenever a block is in used by an append point, we store it within the
  * used_list. We then move it back when its free to be used by another append
  * point.
@@ -9,34 +9,34 @@
  * assume that the start of used list is the oldest block, and therefore
  * more likely to contain invalidated pages.
  */
-struct nvm_block *nvm_pool_get_block(struct nvm_pool *pool, int is_gc)
+struct nvm_block *nvm_lun_get_block(struct nvm_lun *lun, int is_gc)
 {
 	struct nvm_stor *s;
 	struct nvm_block *block = NULL;
 	unsigned long flags;
 
-	BUG_ON(!pool);
+	BUG_ON(!lun);
 
-	s = pool->s;
-	spin_lock_irqsave(&pool->lock, flags);
+	s = lun->s;
+	spin_lock_irqsave(&lun->lock, flags);
 
-	if (list_empty(&pool->free_list)) {
-		pr_err_ratelimited("lightnvm: pool %u have no free pages available", pool->id);
-		spin_unlock_irqrestore(&pool->lock, flags);
+	if (list_empty(&lun->free_list)) {
+		pr_err_ratelimited("lightnvm: lun %u have no free pages available", lun->id);
+		spin_unlock_irqrestore(&lun->lock, flags);
 		goto out;
 	}
 
-	while (!is_gc && pool->nr_free_blocks < s->nr_aps) {
-		spin_unlock_irqrestore(&pool->lock, flags);
+	while (!is_gc && lun->nr_free_blocks < s->nr_aps) {
+		spin_unlock_irqrestore(&lun->lock, flags);
 		goto out;
 	}
 
-	block = list_first_entry(&pool->free_list, struct nvm_block, list);
-	list_move_tail(&block->list, &pool->used_list);
+	block = list_first_entry(&lun->free_list, struct nvm_block, list);
+	list_move_tail(&block->list, &lun->used_list);
 
-	pool->nr_free_blocks--;
+	lun->nr_free_blocks--;
 
-	spin_unlock_irqrestore(&pool->lock, flags);
+	spin_unlock_irqrestore(&lun->lock, flags);
 
 	nvm_reset_block(block);
 
@@ -48,17 +48,17 @@ out:
  * free list. We add it last to allow round-robin use of all pages. Thereby
  * provide simple (naive) wear-leveling.
  */
-void nvm_pool_put_block(struct nvm_block *block)
+void nvm_lun_put_block(struct nvm_block *block)
 {
-	struct nvm_pool *pool = block->pool;
+	struct nvm_lun *lun = block->lun;
 	unsigned long flags;
 
-	spin_lock_irqsave(&pool->lock, flags);
+	spin_lock_irqsave(&lun->lock, flags);
 
-	list_move_tail(&block->list, &pool->free_list);
-	pool->nr_free_blocks++;
+	list_move_tail(&block->list, &lun->free_list);
+	lun->nr_free_blocks++;
 
-	spin_unlock_irqrestore(&pool->lock, flags);
+	spin_unlock_irqrestore(&lun->lock, flags);
 }
 
 /* lookup the primary translation table. If there isn't an associated block to
@@ -90,20 +90,20 @@ static inline unsigned int nvm_rq_sectors(const struct request *rq)
 static struct nvm_ap *__nvm_get_ap_rr(struct nvm_stor *s, int is_gc)
 {
 	unsigned int i;
-	struct nvm_pool *pool, *max_free;
+	struct nvm_lun *lun, *max_free;
 
 	if (!is_gc)
 		return get_next_ap(s);
 
 	/* during GC, we don't care about RR, instead we want to make
-	 * sure that we maintain evenness between the block pools. */
-	max_free = &s->pools[0];
-	/* prevent GC-ing pool from devouring pages of a pool with
+	 * sure that we maintain evenness between the block luns. */
+	max_free = &s->luns[0];
+	/* prevent GC-ing lun from devouring pages of a lun with
 	 * little free blocks. We don't take the lock as we only need an
 	 * estimate. */
-	nvm_for_each_pool(s, pool, i) {
-		if (pool->nr_free_blocks > max_free->nr_free_blocks)
-			max_free = pool;
+	nvm_for_each_lun(s, lun, i) {
+		if (lun->nr_free_blocks > max_free->nr_free_blocks)
+			max_free = lun;
 	}
 
 	return &s->aps[max_free->id];
@@ -120,7 +120,7 @@ static struct nvm_block *nvm_map_block_rr(struct nvm_stor *s, sector_t l_addr,
 	ap = __nvm_get_ap_rr(s, is_gc);
 
 	spin_lock(&ap->lock);
-	block = s->type->pool_get_blk(ap->pool, is_gc);
+	block = s->type->lun_get_blk(ap->lun, is_gc);
 	spin_unlock(&ap->lock);
 	return block; /*NULL iff. no free blocks*/
 }
@@ -138,7 +138,7 @@ static struct nvm_addr *nvm_map_page_rr(struct nvm_stor *s, sector_t l_addr,
 {
 	struct nvm_addr *p;
 	struct nvm_ap *ap;
-	struct nvm_pool *pool;
+	struct nvm_lun *lun;
 	struct nvm_block *p_block;
 	sector_t p_addr;
 
@@ -147,7 +147,7 @@ static struct nvm_addr *nvm_map_page_rr(struct nvm_stor *s, sector_t l_addr,
 		return NULL;
 
 	ap = __nvm_get_ap_rr(s, is_gc);
-	pool = ap->pool;
+	lun = ap->lun;
 
 	spin_lock(&ap->lock);
 
@@ -155,13 +155,13 @@ static struct nvm_addr *nvm_map_page_rr(struct nvm_stor *s, sector_t l_addr,
 	p_addr = nvm_alloc_phys_addr(p_block);
 
 	if (p_addr == ADDR_EMPTY) {
-		p_block = s->type->pool_get_blk(pool, 0);
+		p_block = s->type->lun_get_blk(lun, 0);
 
 		if (!p_block) {
 			if (is_gc) {
 				p_addr = nvm_alloc_phys_addr(ap->gc_cur);
 				if (p_addr == ADDR_EMPTY) {
-					p_block = s->type->pool_get_blk(pool, 1);
+					p_block = s->type->lun_get_blk(lun, 1);
 					if (!p_block) {
 						pr_err("lightnvm: no more blocks");
 						goto finished;
@@ -212,8 +212,8 @@ struct nvm_target_type nvm_target_rrpc = {
 	.write_rq	= nvm_write_rq,
 	.read_rq	= nvm_read_rq,
 
-	.pool_get_blk	= nvm_pool_get_block,
-	.pool_put_blk	= nvm_pool_put_block,
+	.lun_get_blk	= nvm_lun_get_block,
+	.lun_put_blk	= nvm_lun_put_block,
 };
 
 /* none target type, round robin, block-based FTL, and cost-based GC */
@@ -228,6 +228,6 @@ struct nvm_target_type nvm_target_rrbc = {
 	.write_rq	= nvm_write_rq,
 	.read_rq	= nvm_read_rq,
 
-	.pool_get_blk	= nvm_pool_get_block,
-	.pool_put_blk	= nvm_pool_put_block,
+	.lun_get_blk	= nvm_lun_get_block,
+	.lun_put_blk	= nvm_lun_put_block,
 };

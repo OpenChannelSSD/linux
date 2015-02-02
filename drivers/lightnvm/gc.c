@@ -11,10 +11,10 @@ struct greedy_block {
 	struct work_struct ws_queue_gc;	/* Schedule when GC'ing is allowed */
 };
 
-struct greedy_pool {
-	struct nvm_pool *pool;
+struct greedy_lun {
+	struct nvm_lun *lun;
 	struct list_head prio_list;		/* Blocks that may be GC'ed */
-	struct work_struct ws_gc;		/* Schedule GC'ing of pool */
+	struct work_struct ws_gc;		/* Schedule GC'ing of lun */
 	struct greedy_block *block_mem;	/* Reference to block allocation */
 };
 
@@ -144,9 +144,9 @@ static int nvm_move_valid_pages(struct nvm_stor *s, struct nvm_block *block)
 	return 0;
 }
 
-static inline struct greedy_pool *greedy_pool(struct nvm_pool *pool)
+static inline struct greedy_lun *greedy_lun(struct nvm_lun *lun)
 {
-	return (struct greedy_pool *)pool->gc_private;
+	return (struct greedy_lun *)lun->gc_private;
 }
 
 static inline struct greedy_block *greedy_block(struct nvm_block *block)
@@ -154,37 +154,37 @@ static inline struct greedy_block *greedy_block(struct nvm_block *block)
 	return (struct greedy_block *)block->gc_private;
 }
 
-static void nvm_greedy_queue_pool_gc(struct nvm_pool *pool)
+static void nvm_greedy_queue_lun_gc(struct nvm_lun *lun)
 {
-	struct greedy_pool *gpool = greedy_pool(pool);
-	struct nvm_stor *s = pool->s;
+	struct greedy_lun *glun = greedy_lun(lun);
+	struct nvm_stor *s = lun->s;
 
-	queue_work(s->krqd_wq, &gpool->ws_gc);
+	queue_work(s->krqd_wq, &glun->ws_gc);
 }
 
 static void nvm_greedy_kick(struct nvm_stor *s)
 {
-	struct nvm_pool *pool;
+	struct nvm_lun *lun;
 	unsigned int i;
 
 	BUG_ON(!s);
 
-	nvm_for_each_pool(s, pool, i)
-		nvm_greedy_queue_pool_gc(pool);
+	nvm_for_each_lun(s, lun, i)
+		nvm_greedy_queue_lun_gc(lun);
 }
 
 void nvm_greedy_block_gc(struct work_struct *work)
 {
 	struct greedy_block *block_data = container_of(work, struct greedy_block, ws_gc);
 	struct nvm_block *block = block_data->block;
-	struct nvm_stor *s = block->pool->s;
+	struct nvm_stor *s = block->lun->s;
 
 	pr_debug("lightnvm: block '%d' being reclaimed\n", block->id);
 	if (nvm_move_valid_pages(s, block))
 		return;
 
 	nvm_erase_block(s, block);
-	s->type->pool_put_blk(block);
+	s->type->lun_put_blk(block);
 }
 
 /* the block with highest number of invalid pages, will be in the beginning
@@ -203,10 +203,10 @@ static struct greedy_block *gblock_max_invalid(struct greedy_block *ga,
 }
 
 /* linearly find the block with highest number of invalid pages
- * requires pool->lock */
-static struct greedy_block *block_prio_find_max(struct greedy_pool *gpool)
+ * requires lun->lock */
+static struct greedy_block *block_prio_find_max(struct greedy_lun *glun)
 {
-	struct list_head *prio_list = &gpool->prio_list;
+	struct list_head *prio_list = &glun->prio_list;
 	struct greedy_block *gblock, *max;
 
 	BUG_ON(list_empty(prio_list));
@@ -218,22 +218,22 @@ static struct greedy_block *block_prio_find_max(struct greedy_pool *gpool)
 	return max;
 }
 
-static void nvm_greedy_pool_gc(struct work_struct *work)
+static void nvm_greedy_lun_gc(struct work_struct *work)
 {
-	struct greedy_pool *gpool = container_of(work, struct greedy_pool, ws_gc);
-	struct nvm_pool *pool = gpool->pool;
-	struct nvm_stor *s = pool->s;
+	struct greedy_lun *glun = container_of(work, struct greedy_lun, ws_gc);
+	struct nvm_lun *lun = glun->lun;
+	struct nvm_stor *s = lun->s;
 	unsigned int nr_blocks_need;
 
-	nr_blocks_need = pool->nr_blocks / GC_LIMIT_INVERSE;
+	nr_blocks_need = lun->nr_blocks / GC_LIMIT_INVERSE;
 
 	if (nr_blocks_need < s->nr_aps)
 		nr_blocks_need = s->nr_aps;
 
-	spin_lock(&pool->lock);
-	while (nr_blocks_need > pool->nr_free_blocks &&
-					!list_empty(&gpool->prio_list)) {
-		struct greedy_block *gblock = block_prio_find_max(gpool);
+	spin_lock(&lun->lock);
+	while (nr_blocks_need > lun->nr_free_blocks &&
+					!list_empty(&glun->prio_list)) {
+		struct greedy_block *gblock = block_prio_find_max(glun);
 		struct nvm_block *block = gblock->block;
 
 		if (!block->nr_invalid_pages) {
@@ -251,7 +251,7 @@ static void nvm_greedy_pool_gc(struct work_struct *work)
 
 		nr_blocks_need--;
 	}
-	spin_unlock(&pool->lock);
+	spin_unlock(&lun->lock);
 
 	/* TODO: Hint that request queue can be started again */
 }
@@ -259,20 +259,20 @@ static void nvm_greedy_pool_gc(struct work_struct *work)
 static void nvm_greedy_queue_gc(struct work_struct *work)
 {
 	struct greedy_block *gblock = container_of(work, struct greedy_block, ws_queue_gc);
-	struct nvm_pool *pool = gblock->block->pool;
-	struct greedy_pool *gpool = pool->gc_private;
+	struct nvm_lun *lun = gblock->block->lun;
+	struct greedy_lun *glun = lun->gc_private;
 
-	spin_lock(&pool->lock);
-	list_add_tail(&gblock->prio, &gpool->prio_list);
-	spin_unlock(&pool->lock);
+	spin_lock(&lun->lock);
+	list_add_tail(&gblock->prio, &glun->prio_list);
+	spin_unlock(&lun->lock);
 	pr_debug("nvm: block '%d' is full, allow GC (DONE)\n", gblock->block->id);
 }
 
 static void nvm_greedy_queue(struct nvm_block *block)
 {
 	struct greedy_block *gblock = greedy_block(block);
-	struct nvm_pool *pool = block->pool;
-	struct nvm_stor *s = pool->s;
+	struct nvm_lun *lun = block->lun;
+	struct nvm_stor *s = lun->s;
 	pr_debug("nvm: block '%d' is full, allow GC (sched)\n", block->id);
 
 	queue_work(s->kgc_wq, &gblock->ws_queue_gc);
@@ -280,54 +280,54 @@ static void nvm_greedy_queue(struct nvm_block *block)
 
 static void nvm_greedy_free(struct nvm_stor *s)
 {
-	struct nvm_pool *pool;
+	struct nvm_lun *lun;
 	int i;
 
-	nvm_for_each_pool(s, pool, i) {
-		struct greedy_pool *gpool = greedy_pool(pool);
-		if (!gpool || !gpool->block_mem)
+	nvm_for_each_lun(s, lun, i) {
+		struct greedy_lun *glun = greedy_lun(lun);
+		if (!glun || !glun->block_mem)
 			break;
-		vfree(gpool->block_mem);
+		vfree(glun->block_mem);
 	}
 
-	/* All per-pool GC-data space was allocated in one go, so this suffices */
-	if (s->nr_pools && s->pools && s->pools[0].gc_private)
-		kfree(s->pools[0].gc_private);
+	/* All per-lun GC-data space was allocated in one go, so this suffices */
+	if (s->nr_luns && s->luns && s->luns[0].gc_private)
+		kfree(s->luns[0].gc_private);
 }
 
 static int nvm_greedy_init(struct nvm_stor *s)
 {
-	struct greedy_pool *pool_mem;
-	struct nvm_pool *pool;
+	struct greedy_lun *lun_mem;
+	struct nvm_lun *lun;
 	int i, j;
 
-	pool_mem = kcalloc(s->nr_pools, sizeof(struct greedy_pool),
+	lun_mem = kcalloc(s->nr_luns, sizeof(struct greedy_lun),
 						GFP_KERNEL);
-	if (!pool_mem) {
-		pr_err("lightnvm: failed allocating pools for greedy GC\n");
+	if (!lun_mem) {
+		pr_err("lightnvm: failed allocating luns for greedy GC\n");
 		return -ENOMEM;
 	}
 
-	nvm_for_each_pool(s, pool, i) {
-		struct greedy_pool *gpool = &pool_mem[i];
+	nvm_for_each_lun(s, lun, i) {
+		struct greedy_lun *glun = &lun_mem[i];
 		struct nvm_block *block;
 
-		pool->gc_private = gpool;
-		gpool->pool = pool;
+		lun->gc_private = glun;
+		glun->lun = lun;
 
-		INIT_LIST_HEAD(&gpool->prio_list);
-		INIT_WORK(&gpool->ws_gc, nvm_greedy_pool_gc);
+		INIT_LIST_HEAD(&glun->prio_list);
+		INIT_WORK(&glun->ws_gc, nvm_greedy_lun_gc);
 
-		gpool->block_mem = vzalloc(sizeof(struct greedy_block) * s->nr_blks_per_pool);
-		if (!gpool->block_mem) {
+		glun->block_mem = vzalloc(sizeof(struct greedy_block) * s->nr_blks_per_lun);
+		if (!glun->block_mem) {
 			pr_err("nvm: failed allocating blocks for greedy "
-				"GC (in pool %d of %d)!\n", i, s->nr_pools);
+				"GC (in lun %d of %d)!\n", i, s->nr_luns);
 			nvm_greedy_free(s);
 			return -ENOMEM;
 		}
 
-		pool_for_each_block(pool, block, j) {
-			struct greedy_block *gblock = &gpool->block_mem[j];
+		lun_for_each_block(lun, block, j) {
+			struct greedy_block *gblock = &glun->block_mem[j];
 
 			block->gc_private = gblock;
 			gblock->block = block;

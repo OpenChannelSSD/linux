@@ -7,11 +7,11 @@ static ssize_t nvm_attr_free_blocks_show(struct nvm_dev *nvm, char *buf)
 {
 	char *buf_start = buf;
 	struct nvm_stor *stor = nvm->stor;
-	struct nvm_pool *pool;
+	struct nvm_lun *lun;
 	unsigned int i;
 
-	nvm_for_each_pool(stor, pool, i)
-		buf += sprintf(buf, "%8u\t%u\n", i, pool->nr_free_blocks);
+	nvm_for_each_lun(stor, lun, i)
+		buf += sprintf(buf, "%8u\t%u\n", i, lun->nr_free_blocks);
 
 	return buf - buf_start;
 }

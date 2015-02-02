@@ -58,7 +58,7 @@
  * in-flight addresses. */
 #define NVM_INFLIGHT_PARTITIONS 8
 
-/* Pool descriptions */
+/* lun descriptions */
 struct nvm_block {
 	struct {
 		spinlock_t lock;
@@ -72,7 +72,7 @@ struct nvm_block {
 	} ____cacheline_aligned_in_smp;
 
 	unsigned int id;
-	struct nvm_pool *pool;
+	struct nvm_lun *lun;
 	struct nvm_ap *ap;
 
 	/* Management structures */
@@ -97,8 +97,8 @@ struct nvm_rev_addr {
 	sector_t addr;
 };
 
-struct nvm_pool {
-	/* Pool block lists */
+struct nvm_lun {
+	/* lun block lists */
 	struct {
 		spinlock_t lock;
 	} ____cacheline_aligned_in_smp;
@@ -117,22 +117,22 @@ struct nvm_pool {
 	struct nvm_block *blocks;
 	struct nvm_stor *s;
 
-	void *tgt_private;	/*target-specific per-pool data*/
-	void *gc_private;	/*GC-specific per-pool data*/
+	void *tgt_private;	/*target-specific per-lun data*/
+	void *gc_private;	/*GC-specific per-lun data*/
 };
 
 /*
- * nvm_ap. ap is an append point. A pool can have 1..X append points attached.
+ * nvm_ap. ap is an append point. A lun can have 1..X append points attached.
  * An append point has a current block, that it writes to, and when its full,
  * it requests a new block, of which it continues its writes.
  *
- * one ap per pool may be reserved for pack-hints related writes.
+ * one ap per lun may be reserved for pack-hints related writes.
  * In those that are not not, private is NULL.
  */
 struct nvm_ap {
 	spinlock_t lock;
 	struct nvm_stor *parent;
-	struct nvm_pool *pool;
+	struct nvm_lun *lun;
 	struct nvm_block *cur;
 	struct nvm_block *gc_cur;
 
@@ -162,7 +162,7 @@ struct nvm_inflight {
 struct nvm_stor;
 struct per_rq_data;
 struct nvm_block;
-struct nvm_pool;
+struct nvm_lun;
 
 /* overridable functionality */
 typedef struct nvm_addr *(nvm_lookup_ltop_fn)(struct nvm_stor *, sector_t);
@@ -173,9 +173,9 @@ typedef struct nvm_block *(nvm_map_ltop_block_fn)(struct nvm_stor *, sector_t,
 typedef int (nvm_write_rq_fn)(struct nvm_stor *, struct request *);
 typedef int (nvm_read_rq_fn)(struct nvm_stor *, struct request *);
 typedef void (nvm_alloc_phys_addr_fn)(struct nvm_stor *, struct nvm_block *);
-typedef struct nvm_block *(nvm_pool_get_blk_fn)(struct nvm_pool *pool,
+typedef struct nvm_block *(nvm_lun_get_blk_fn)(struct nvm_lun *lun,
 						int is_gc);
-typedef void (nvm_pool_put_blk_fn)(struct nvm_block *block);
+typedef void (nvm_lun_put_blk_fn)(struct nvm_block *block);
 typedef int (nvm_ioctl_fn)(struct nvm_stor *,
 					unsigned int cmd, unsigned long arg);
 typedef int (nvm_tgt_init_fn)(struct nvm_stor *);
@@ -204,8 +204,8 @@ struct nvm_target_type {
 	nvm_endio_fn *end_rq;
 
 	/* engine-specific overrides */
-	nvm_pool_get_blk_fn *pool_get_blk;
-	nvm_pool_put_blk_fn *pool_put_blk;
+	nvm_lun_get_blk_fn *lun_get_blk;
+	nvm_lun_put_blk_fn *lun_put_blk;
 	nvm_map_ltop_page_fn *map_page;
 	nvm_map_ltop_block_fn *map_block;
 
@@ -268,15 +268,15 @@ struct nvm_stor {
 	spinlock_t rev_lock;
 	/* Usually instantiated to the number of available parallel channels
 	 * within the hardware device. i.e. a controller with 4 flash channels,
-	 * would have 4 pools.
+	 * would have 4 luns.
 	 *
 	 * We assume that the device exposes its channels as a linear address
-	 * space. A pool therefore have a phy_addr_start and phy_addr_end that
+	 * space. A lun therefore have a phy_addr_start and phy_addr_end that
 	 * denotes the start and end. This abstraction is used to let the
 	 * lightnvm (or any other device) expose its read/write/erase interface
 	 * and be administrated by the host system.
 	 */
-	struct nvm_pool *pools;
+	struct nvm_lun *luns;
 
 	/* Append points */
 	struct nvm_ap *aps;
@@ -285,11 +285,11 @@ struct nvm_stor {
 	mempool_t *page_pool;
 
 	/* Frequently used config variables */
-	int nr_pools;
-	int nr_blks_per_pool;
+	int nr_luns;
+	int nr_blks_per_lun;
 	int nr_pages_per_blk;
 	int nr_aps;
-	int nr_aps_per_pool;
+	int nr_aps_per_lun;
 
 	struct nvm_id id;
 	/* Calculated/Cached values. These do not reflect the actual usuable
@@ -370,30 +370,30 @@ void nvm_reset_block(struct nvm_block *);
 void nvm_endio(struct nvm_dev *, struct request *, int);
 
 /* targets.c */
-struct nvm_block *nvm_pool_get_block(struct nvm_pool *, int is_gc);
+struct nvm_block *nvm_lun_get_block(struct nvm_lun *, int is_gc);
 
 /* nvmkv.c */
 int nvmkv_init(struct nvm_stor *s, unsigned long size);
 void nvmkv_exit(struct nvm_stor *s);
 int nvmkv_unpack(struct nvm_dev *dev, struct lightnvm_cmd_kv __user *ucmd);
-void nvm_pool_put_block(struct nvm_block *);
+void nvm_lun_put_block(struct nvm_block *);
 
-#define nvm_for_each_pool(n, pool, i) \
-		for ((i) = 0, pool = &(n)->pools[0]; \
-			(i) < (n)->nr_pools; (i)++, pool = &(n)->pools[(i)])
+#define nvm_for_each_lun(n, lun, i) \
+		for ((i) = 0, lun = &(n)->luns[0]; \
+			(i) < (n)->nr_luns; (i)++, lun = &(n)->luns[(i)])
 
 #define nvm_for_each_ap(n, ap, i) \
 		for ((i) = 0, ap = &(n)->aps[0]; \
 			(i) < (n)->nr_aps; (i)++, ap = &(n)->aps[(i)])
 
-#define pool_for_each_block(p, b, i) \
+#define lun_for_each_block(p, b, i) \
 		for ((i) = 0, b = &(p)->blocks[0]; \
 			(i) < (p)->nr_blocks; (i)++, b = &(p)->blocks[(i)])
 
 #define block_for_each_page(b, p) \
 		for ((p)->addr = block_to_addr((b)), (p)->block = (b); \
 			(p)->addr < block_to_addr((b)) \
-				+ (b)->pool->s->nr_pages_per_blk; \
+				+ (b)->lun->s->nr_pages_per_blk; \
 			(p)->addr++)
 
 static inline struct nvm_ap *get_next_ap(struct nvm_stor *s)
@@ -403,22 +403,22 @@ static inline struct nvm_ap *get_next_ap(struct nvm_stor *s)
 
 static inline int block_is_full(struct nvm_block *block)
 {
-	struct nvm_stor *s = block->pool->s;
+	struct nvm_stor *s = block->lun->s;
 
 	return block->next_page == s->nr_pages_per_blk;
 }
 
 static inline sector_t block_to_addr(struct nvm_block *block)
 {
-	struct nvm_stor *s = block->pool->s;
+	struct nvm_stor *s = block->lun->s;
 
 	return block->id * s->nr_pages_per_blk;
 }
 
-static inline struct nvm_pool *paddr_to_pool(struct nvm_stor *s,
+static inline struct nvm_lun *paddr_to_lun(struct nvm_stor *s,
 							sector_t p_addr)
 {
-	return &s->pools[p_addr / (s->nr_pages / s->nr_pools)];
+	return &s->luns[p_addr / (s->nr_pages / s->nr_luns)];
 }
 
 static inline struct nvm_ap *block_to_ap(struct nvm_stor *s,
@@ -426,9 +426,9 @@ static inline struct nvm_ap *block_to_ap(struct nvm_stor *s,
 {
 	unsigned int ap_idx, div, mod;
 
-	div = b->id / s->nr_blks_per_pool;
-	mod = b->id % s->nr_blks_per_pool;
-	ap_idx = div + (mod / (s->nr_blks_per_pool / s->nr_aps_per_pool));
+	div = b->id / s->nr_blks_per_lun;
+	mod = b->id % s->nr_blks_per_lun;
+	ap_idx = div + (mod / (s->nr_blks_per_lun / s->nr_aps_per_lun));
 
 	return &s->aps[ap_idx];
 }

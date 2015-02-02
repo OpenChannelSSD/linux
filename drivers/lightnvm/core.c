@@ -99,10 +99,10 @@ void nvm_update_map(struct nvm_stor *s, sector_t l_addr, struct nvm_addr *p,
 	spin_unlock(&s->rev_lock);
 }
 
-/* requires pool->lock lock */
+/* requires lun->lock lock */
 void nvm_reset_block(struct nvm_block *block)
 {
-	struct nvm_stor *s = block->pool->s;
+	struct nvm_stor *s = block->lun->s;
 
 	spin_lock(&block->lock);
 	bitmap_zero(block->invalid_pages, s->nr_pages_per_blk);
@@ -171,7 +171,7 @@ void nvm_endio(struct nvm_dev *nvm_dev, struct request *rq, int err)
 		/* maintain data in buffer until block is full */
 		data_cnt = atomic_inc_return(&block->data_cmnt_size);
 		if (data_cnt == s->nr_pages_per_blk) {
-			/* cannot take the pool lock here, defer if necessary */
+			/* cannot take the lun lock here, defer if necessary */
 			s->gc_ops->queue(block);
 		}
 	}

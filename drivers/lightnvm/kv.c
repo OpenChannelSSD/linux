@@ -245,15 +245,15 @@ static int get(struct nvm_stor *s, struct lightnvm_cmd_kv *cmd, void *key,
 static struct nvm_block *acquire_block(struct nvm_stor *s)
 {
 	struct nvm_ap *ap;
-	struct nvm_pool *pool;
+	struct nvm_lun *lun;
 	struct nvm_block *block = NULL;
 	int i;
 
 	for (i = 0; i < s->nr_aps; i++) {
 		ap = get_next_ap(s);
-		pool = ap->pool;
+		lun = ap->lun;
 
-		block = s->type->pool_get_blk(pool, 0);
+		block = s->type->lun_get_blk(lun, 0);
 		if (block)
 			break;
 	}
@@ -285,13 +285,13 @@ static int update_entry(struct nvm_stor *s, struct lightnvm_cmd_kv *cmd,
 	}
 
 	if (entry->blk)
-		s->type->pool_put_blk(entry->blk);
+		s->type->lun_put_blk(entry->blk);
 
 	entry->blk = block;
 
 	return ret;
 io_err:
-	s->type->pool_put_blk(block);
+	s->type->lun_put_blk(block);
 no_block:
 	return ret;
 }
@@ -396,7 +396,7 @@ static int del(struct nvm_stor *s, struct lightnvm_cmd_kv *cmd, void *key,
 	idx = tbl_get_idx(tbl, h1, h2, EXISTING_ENTRY);
 	if (idx != -1) {
 		entry = &tbl->entries[idx];
-		s->type->pool_put_blk(entry->blk);
+		s->type->lun_put_blk(entry->blk);
 		memset(entry, 0, sizeof(struct kv_entry));
 	} else {
 		pr_debug("lightnvm: could not find entry!\n");

@@ -30,16 +30,16 @@
 
 
 /* Defaults
- * Number of append points per pool. We assume that accesses within a pool is
+ * Number of append points per lun. We assume that accesses within a lun is
  * serial (NAND flash/PCM/etc.)
  */
-#define APS_PER_POOL 1
+#define APS_PER_LUN 1
 
 /* Run GC every X seconds */
 #define GC_TIME 10
 
-/* Minimum pages needed within a pool */
-#define MIN_POOL_PAGES 16
+/* Minimum pages needed within a lun */
+#define MIN_LUN_PAGES 16
 
 extern struct nvm_target_type nvm_target_rrpc;
 extern struct nvm_gc_type nvm_gc_greedy;
@@ -160,9 +160,9 @@ static void nvm_aps_free(struct nvm_stor *s)
 	kfree(s->aps);
 }
 
-static void nvm_pools_free(struct nvm_stor *s)
+static void nvm_luns_free(struct nvm_stor *s)
 {
-	struct nvm_pool *pool;
+	struct nvm_lun *lun;
 	int i;
 
 	if (s->krqd_wq)
@@ -171,57 +171,57 @@ static void nvm_pools_free(struct nvm_stor *s)
 	if (s->kgc_wq)
 		destroy_workqueue(s->kgc_wq);
 
-	nvm_for_each_pool(s, pool, i) {
-		if (!pool->blocks)
+	nvm_for_each_lun(s, lun, i) {
+		if (!lun->blocks)
 			break;
-		vfree(pool->blocks);
+		vfree(lun->blocks);
 	}
 
-	kfree(s->pools);
+	kfree(s->luns);
 }
 
-static int nvm_pools_init(struct nvm_stor *s)
+static int nvm_luns_init(struct nvm_stor *s)
 {
-	struct nvm_pool *pool;
+	struct nvm_lun *lun;
 	struct nvm_id_chnl *chnl;
 	int i;
 
 	spin_lock_init(&s->rev_lock);
 
-	s->pools = kcalloc(s->nr_pools, sizeof(struct nvm_pool), GFP_KERNEL);
-	if (!s->pools)
+	s->luns = kcalloc(s->nr_luns, sizeof(struct nvm_lun), GFP_KERNEL);
+	if (!s->luns)
 		return -ENOMEM;
 
-	nvm_for_each_pool(s, pool, i) {
+	nvm_for_each_lun(s, lun, i) {
 		chnl = &s->id.chnls[i];
 		pr_info("lightnvm: p %u qsize %u gr %u ge %u begin %llu end %llu\n",
 			i, chnl->queue_size, chnl->gran_read, chnl->gran_erase,
 			chnl->laddr_begin, chnl->laddr_end);
 
-		spin_lock_init(&pool->lock);
+		spin_lock_init(&lun->lock);
 
-		INIT_LIST_HEAD(&pool->free_list);
-		INIT_LIST_HEAD(&pool->used_list);
+		INIT_LIST_HEAD(&lun->free_list);
+		INIT_LIST_HEAD(&lun->used_list);
 
-		pool->id = i;
-		pool->s = s;
-		pool->chnl = chnl;
-		pool->nr_free_blocks = pool->nr_blocks =
+		lun->id = i;
+		lun->s = s;
+		lun->chnl = chnl;
+		lun->nr_free_blocks = lun->nr_blocks =
 				(chnl->laddr_end - chnl->laddr_begin + 1) /
 				(chnl->gran_erase / chnl->gran_read);
 
-		/* TODO: Global values derived from variable size pools */
-		s->total_blocks += pool->nr_blocks;
-		/* TODO: make blks per pool variable amond channels */
-		s->nr_blks_per_pool = pool->nr_free_blocks;
+		/* TODO: Global values derived from variable size luns */
+		s->total_blocks += lun->nr_blocks;
+		/* TODO: make blks per lun variable amond channels */
+		s->nr_blks_per_lun = lun->nr_free_blocks;
 		/* TODO: gran_{read,write} may differ */
 		s->nr_pages_per_blk = chnl->gran_erase / chnl->gran_read *
 					(chnl->gran_read / s->sector_size);
 	}
 
-	/* we make room for each pool context. */
+	/* we make room for each lun context. */
 	s->krqd_wq = alloc_workqueue("knvm-work", WQ_MEM_RECLAIM|WQ_UNBOUND,
-						s->nr_pools);
+						s->nr_luns);
 	if (!s->krqd_wq)
 		return -ENOMEM;
 
@@ -267,27 +267,27 @@ static int nvm_block_map(struct nvm_stor *s, struct nvm_block *block)
 
 static int nvm_blocks_init(struct nvm_stor *s)
 {
-	struct nvm_pool *pool;
+	struct nvm_lun *lun;
 	struct nvm_block *block;
-	sector_t pool_iter, block_iter, cur_block_id = 0;
+	sector_t lun_iter, block_iter, cur_block_id = 0;
 
-	nvm_for_each_pool(s, pool, pool_iter) {
-		pool->blocks = vzalloc(sizeof(struct nvm_block) *
-						pool->nr_blocks);
-		if (!pool->blocks)
+	nvm_for_each_lun(s, lun, lun_iter) {
+		lun->blocks = vzalloc(sizeof(struct nvm_block) *
+						lun->nr_blocks);
+		if (!lun->blocks)
 			return -ENOMEM;
 
-		pool_for_each_block(pool, block, block_iter) {
+		lun_for_each_block(lun, block, block_iter) {
 			spin_lock_init(&block->lock);
 			INIT_LIST_HEAD(&block->list);
 
-			block->pool = pool;
+			block->lun = lun;
 			block->id = cur_block_id++;
 
 			if (nvm_block_map(s, block))
-				list_add_tail(&block->list, &pool->used_list);
+				list_add_tail(&block->list, &lun->used_list);
 			else
-				list_add_tail(&block->list, &pool->free_list);
+				list_add_tail(&block->list, &lun->free_list);
 		}
 	}
 
@@ -300,7 +300,7 @@ static int nvm_aps_init(struct nvm_stor *s)
 	struct nvm_ap *ap;
 	int i;
 
-	s->nr_aps = s->nr_aps_per_pool * s->nr_pools;
+	s->nr_aps = s->nr_aps_per_lun * s->nr_luns;
 	s->aps = kcalloc(s->nr_aps, sizeof(struct nvm_ap), GFP_KERNEL);
 	if (!s->aps)
 		return -ENOMEM;;
@@ -308,13 +308,13 @@ static int nvm_aps_init(struct nvm_stor *s)
 	nvm_for_each_ap(s, ap, i) {
 		spin_lock_init(&ap->lock);
 		ap->parent = s;
-		ap->pool = &s->pools[i / s->nr_aps_per_pool];
+		ap->lun = &s->luns[i / s->nr_aps_per_lun];
 
-		block = s->type->pool_get_blk(ap->pool, 0);
+		block = s->type->lun_get_blk(ap->lun, 0);
 		nvm_set_ap_cur(ap, block);
 
 		/* Emergency gc block */
-		block = s->type->pool_get_blk(ap->pool, 1);
+		block = s->type->lun_get_blk(ap->lun, 1);
 		ap->gc_cur = block;
 	}
 
@@ -360,12 +360,12 @@ static int nvm_stor_init(struct nvm_stor *s, int max_qdepth)
 {
 	int i;
 
-	s->nr_pools = s->id.nchannels;
-	s->nr_aps_per_pool = APS_PER_POOL;
+	s->nr_luns = s->id.nchannels;
+	s->nr_aps_per_lun = APS_PER_LUN;
 	s->config.gc_time = GC_TIME;
 	s->sector_size = EXPOSED_PAGE_SIZE;
 
-	s->page_pool = mempool_create_page_pool(MIN_POOL_PAGES, 0);
+	s->page_pool = mempool_create_page_pool(MIN_LUN_PAGES, 0);
 	if (!s->page_pool)
 		return -ENOMEM;
 
@@ -442,7 +442,7 @@ static void nvm_free(struct nvm_dev *nvm)
 
 	nvm_aps_free(s);
 	/* also frees blocks */
-	nvm_pools_free(s);
+	nvm_luns_free(s);
 
 	nvm_free_nvm_id(&s->id);
 
@@ -531,19 +531,19 @@ int nvm_init(struct nvm_dev *nvm)
 		goto err;
 	}
 
-	ret = nvm_pools_init(s);
+	ret = nvm_luns_init(s);
 	if (ret) {
-		pr_err("lightnvm: could not initialize pools\n");
+		pr_err("lightnvm: could not initialize luns\n");
 		goto err;
 	}
 
-	/* s->nr_pages_per_blk obtained from nvm_pools_init */
+	/* s->nr_pages_per_blk obtained from nvm_luns_init */
 	if (s->nr_pages_per_blk > MAX_INVALID_PAGES_STORAGE * BITS_PER_LONG) {
 		pr_err("lightnvm: number of pages per block too high. Increase MAX_INVALID_PAGES_STORAGE.");
 		ret = -EINVAL;
 		goto err;
 	}
-	s->nr_pages = s->nr_pools * s->nr_blks_per_pool * s->nr_pages_per_blk;
+	s->nr_pages = s->nr_luns * s->nr_blks_per_lun * s->nr_pages_per_blk;
 
 	ret = nvm_stor_map_init(s);
 	if (ret) {
@@ -577,9 +577,9 @@ int nvm_init(struct nvm_dev *nvm)
 
 	pr_info("lightnvm: allocating %lu physical pages (%lu KB)\n",
 			s->nr_pages, s->nr_pages * s->sector_size / 1024);
-	pr_info("lightnvm: pools: %u\n", s->nr_pools);
-	pr_info("lightnvm: blocks: %u\n", s->nr_blks_per_pool);
-	pr_info("lightnvm: append points per pool: %u\n", s->nr_aps_per_pool);
+	pr_info("lightnvm: luns: %u\n", s->nr_luns);
+	pr_info("lightnvm: blocks: %u\n", s->nr_blks_per_lun);
+	pr_info("lightnvm: append points per lun: %u\n", s->nr_aps_per_lun);
 	pr_info("lightnvm: target sector size=%d\n", s->sector_size);
 	pr_info("lightnvm: append points: %u\n", s->nr_aps);
 	pr_info("lightnvm: pages per block: %u\n", s->nr_pages_per_blk);
