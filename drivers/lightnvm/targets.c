@@ -13,22 +13,21 @@ struct nvm_block *nvm_lun_get_block(struct nvm_lun *lun, int is_gc)
 {
 	struct nvm_stor *s;
 	struct nvm_block *block = NULL;
-	unsigned long flags;
 
 	BUG_ON(!lun);
 
 	s = lun->s;
-	spin_lock_irqsave(&lun->lock, flags);
+	spin_lock(&lun->lock);
 
 	if (list_empty(&lun->free_list)) {
 		pr_err_ratelimited("lightnvm: lun %u have no free pages available",
 								lun->id);
-		spin_unlock_irqrestore(&lun->lock, flags);
+		spin_unlock(&lun->lock);
 		goto out;
 	}
 
 	while (!is_gc && lun->nr_free_blocks < s->nr_aps) {
-		spin_unlock_irqrestore(&lun->lock, flags);
+		spin_unlock(&lun->lock);
 		goto out;
 	}
 
@@ -37,7 +36,7 @@ struct nvm_block *nvm_lun_get_block(struct nvm_lun *lun, int is_gc)
 
 	lun->nr_free_blocks--;
 
-	spin_unlock_irqrestore(&lun->lock, flags);
+	spin_unlock(&lun->lock);
 
 	nvm_reset_block(block);
 
@@ -52,14 +51,13 @@ out:
 void nvm_lun_put_block(struct nvm_block *block)
 {
 	struct nvm_lun *lun = block->lun;
-	unsigned long flags;
 
-	spin_lock_irqsave(&lun->lock, flags);
+	spin_lock(&lun->lock);
 
 	list_move_tail(&block->list, &lun->free_list);
 	lun->nr_free_blocks++;
 
-	spin_unlock_irqrestore(&lun->lock, flags);
+	spin_unlock(&lun->lock);
 }
 
 /* lookup the primary translation table. If there isn't an associated block to
