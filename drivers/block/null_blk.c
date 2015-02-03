@@ -409,12 +409,6 @@ static int null_nvm_set_rsp(struct request_queue *q, u8 rsp, u8 val)
 	return NVM_RID_NOT_CHANGEABLE | NVM_DNR;
 }
 
-static int null_nvm_get_l2p_tbl(struct request_queue *q, u64 slba, u64 nlb,
-				nvm_l2p_tbl_init_fn *init_cb, struct nvm_stor *s)
-{
-	return 0;
-}
-
 static int null_queue_rq(struct blk_mq_hw_ctx *hctx,
 			 const struct blk_mq_queue_data *bd)
 {
@@ -455,7 +449,6 @@ static struct lightnvm_dev_ops null_nvm_dev_ops = {
 	.identify		= null_nvm_id,
 	.get_features		= null_nvm_get_features,
 	.set_responsibility	= null_nvm_set_rsp,
-	.get_l2p_tbl		= null_nvm_get_l2p_tbl,
 };
 
 static struct blk_mq_ops null_mq_ops = {

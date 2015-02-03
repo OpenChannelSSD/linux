@@ -386,9 +386,11 @@ static int nvm_stor_init(struct nvm_stor *s, int max_qdepth)
 	return 0;
 }
 
-static int nvm_l2p_tbl_init(struct nvm_stor *s, u64 slba, u64 nlb,
+static int nvm_l2p_tbl_init(struct request_queue *q, u64 slba, u64 nlb,
 							__le64 *tbl_sgmt)
 {
+	struct nvm_dev *dev = q->queuedata;
+	struct nvm_stor *s = dev->stor;
 	struct nvm_addr *addr = s->trans_map + slba;
 	struct nvm_rev_addr *raddr = s->rev_trans_map;
 	sector_t max_pages = s->nr_pages * (s->sector_size >> 9);
@@ -541,7 +543,7 @@ int nvm_init(struct nvm_dev *nvm)
 
 	/* s->nr_pages_per_blk obtained from nvm_luns_init */
 	if (s->nr_pages_per_blk > MAX_INVALID_PAGES_STORAGE * BITS_PER_LONG) {
-		pr_err("lightnvm: number of pages per block too high. Increase MAX_INVALID_PAGES_STORAGE.");
+		pr_err("lightnvm: number of pages per block too high.");
 		ret = -EINVAL;
 		goto err;
 	}
@@ -553,11 +555,13 @@ int nvm_init(struct nvm_dev *nvm)
 		goto err;
 	}
 
-	ret = nvm->ops->get_l2p_tbl(nvm->q, 0, s->nr_pages, nvm_l2p_tbl_init,
-									s);
-	if (ret) {
-		pr_err("lightnvm: could not read L2P table.\n");
-		goto err;
+	if (nvm->ops->get_l2p_tbl) {
+		ret = nvm->ops->get_l2p_tbl(nvm->q, 0, s->nr_pages,
+							nvm_l2p_tbl_init);
+		if (ret) {
+			pr_err("lightnvm: could not read L2P table.\n");
+			goto err;
+		}
 	}
 
 	ret = nvm_blocks_init(s);

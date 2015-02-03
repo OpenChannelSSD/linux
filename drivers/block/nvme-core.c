@@ -1561,7 +1561,7 @@ static int nvme_nvm_set_rsp(struct request_queue *q, u8 rsp, u8 val)
 
 
 static int nvme_nvm_get_l2p_tbl(struct request_queue *q, u64 slba, u64 nlb,
-				nvm_l2p_tbl_init_fn *init_cb, struct nvm_stor *s)
+				nvm_l2p_tbl_init_fn *init_cb)
 {
 	struct nvme_ns *ns = q->queuedata;
 	struct nvme_dev *dev = ns->dev;
@@ -1591,13 +1591,13 @@ static int nvme_nvm_get_l2p_tbl(struct request_queue *q, u64 slba, u64 nlb,
 		u64 cmd_nlb = min_t(u64, nlb_pr_dma, nlb);
 
 		res = lnvm_get_l2p_tbl(dev, ns->ns_id, cmd_slba, (u32)cmd_nlb,
-								dma_npages, iod);
+							dma_npages, iod);
 		if (res) {
 			dev_err(&pdev->dev, "L2P table transfer failed (%d)\n", res);
 			res = -EIO;
 			goto free_iod;
 		}
-		if (init_cb(s, cmd_slba, cmd_nlb, (__le64*)mem)) {
+		if (init_cb(q, cmd_slba, cmd_nlb, (__le64*)mem)) {
 			res = -EINTR;
 			goto free_iod;
 		}
