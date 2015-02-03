@@ -398,7 +398,8 @@ static int null_nvm_id(struct request_queue *q, struct nvm_id *id)
 static int null_nvm_get_features(struct request_queue *q,
 						struct nvm_get_features *gf)
 {
-	gf->rsp[0] = 0;
+	gf->rsp = 0;
+	gf->ext = 0;
 
 	return 0;
 }

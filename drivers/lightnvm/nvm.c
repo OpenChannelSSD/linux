@@ -406,7 +406,6 @@ static int nvm_l2p_update(u64 slba, u64 nlb, u64 *entries, void *private)
 		/* LNVM treats address-spaces as silos, LBA and PBA are
 		 * equally large and zero-indexed. */
 		if (unlikely(pba >= max_pages && pba != U64_MAX)) {
-			printk("%llu %llu %llu %llu\n", pba, max_pages, slba, s->nr_pages);
 			pr_err("lightnvm: L2P data entry is out of bounds!\n");
 			return -EINVAL;
 		}
@@ -495,7 +494,7 @@ int nvm_validate_features(struct nvm_dev *dev)
 
 	/* Only default configuration is supported.
 	 * I.e. L2P, No ondrive GC and drive performs ECC */
-	if (gf.rsp[0] != 0)
+	if (gf.rsp != 0 || gf.ext != 0)
 		return -EINVAL;
 
 	return 0;

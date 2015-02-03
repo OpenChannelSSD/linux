@@ -993,7 +993,8 @@ static int adapter_delete_sq(struct nvme_dev *dev, u16 sqid)
 	return adapter_delete_queue(dev, nvme_admin_delete_sq, sqid);
 }
 
-int lnvm_identify(struct nvme_dev *dev, u32 chnl_off, dma_addr_t dma_addr)
+int nvme_nvm_identify_cmd(struct nvme_dev *dev, u32 chnl_off,
+							dma_addr_t dma_addr)
 {
 	struct nvme_command c;
 
@@ -1019,14 +1020,14 @@ int nvme_nvm_get_features_cmd(struct nvme_dev *dev, unsigned nsid,
 }
 
 int nvme_nvm_set_responsibility_cmd(struct nvme_dev *dev, unsigned nsid,
-							dma_addr_t dma_addr)
+								u64 resp)
 {
 	struct nvme_command c;
 
 	memset(&c, 0, sizeof(c));
 	c.common.opcode = lnvm_admin_set_responsibility;
 	c.common.nsid = cpu_to_le32(nsid);
-	c.common.prp1 = cpu_to_le64(dma_addr);
+	c.lnvm_resp.resp = cpu_to_le64(resp);
 
 	return nvme_submit_admin_cmd(dev, &c, NULL);
 }
@@ -1499,7 +1500,7 @@ static int init_chnls(struct nvme_dev *dev, struct nvm_id *nvm_id,
 
 		off += end;
 
-		if (lnvm_identify(dev, off, dma_addr))
+		if (nvme_nvm_identify_cmd(dev, off, dma_addr))
 			return -EIO;
 
 		src = dma_buf->chnls;
@@ -1507,7 +1508,7 @@ static int init_chnls(struct nvme_dev *dev, struct nvm_id *nvm_id,
 	return 0;
 }
 
-static int nvme_nvm_id(struct request_queue *q, struct nvm_id *nvm_id)
+static int nvme_nvm_identify(struct request_queue *q, struct nvm_id *nvm_id)
 {
 	struct nvme_ns *ns = q->queuedata;
 	struct nvme_dev *dev = ns->dev;
@@ -1520,7 +1521,7 @@ static int nvme_nvm_id(struct request_queue *q, struct nvm_id *nvm_id)
 	if (!ctrl)
 		return -ENOMEM;
 
-	ret = lnvm_identify(dev, 0, dma_addr);
+	ret = nvme_nvm_identify_cmd(dev, 0, dma_addr);
 	if (ret) {
 		ret = -EIO;
 		goto out;
@@ -1548,9 +1549,38 @@ out:
 static int nvme_nvm_get_features(struct request_queue *q,
 						struct nvm_get_features *gf)
 {
-	gf->rsp[0] = 0;
+	struct nvme_ns *ns = q->queuedata;
+	struct nvme_dev *dev = ns->dev;
+	struct pci_dev *pdev = dev->pci_dev;
+	dma_addr_t dma_addr;
+	int ret = 0;
+	u64 *mem;
 
-	return 0;
+	mem = (u64 *)dma_alloc_coherent(&pdev->dev,
+					sizeof(struct nvm_get_features),
+							&dma_addr, GFP_KERNEL);
+	if (!mem)
+		return -ENOMEM;
+
+	ret = nvme_nvm_get_features_cmd(dev, ns->ns_id, dma_addr);
+	if (ret)
+		goto finish;
+
+	gf->rsp = le64_to_cpu(mem[0]);
+	gf->ext = le64_to_cpu(mem[1]);
+
+finish:
+	dma_free_coherent(&pdev->dev, sizeof(struct nvm_get_features), mem,
+								dma_addr);
+	return ret;
+}
+
+static int nvme_nvm_set_responsibility(struct request_queue *q, u64 resp)
+{
+	struct nvme_ns *ns = q->queuedata;
+	struct nvme_dev *dev = ns->dev;
+
+	return nvme_nvm_set_responsibility_cmd(dev, ns->ns_id, resp);
 }
 
 static int nvme_nvm_get_l2p_tbl(struct request_queue *q, u64 slba, u64 nlb,
@@ -1618,9 +1648,10 @@ static struct blk_mq_ops nvme_mq_admin_ops = {
 };
 
 static struct lightnvm_dev_ops nvme_nvm_dev_ops = {
-	.identify	= nvme_nvm_id,
-	.get_features	= nvme_nvm_get_features,
-	.get_l2p_tbl	= nvme_nvm_get_l2p_tbl,
+	.identify		= nvme_nvm_identify,
+	.get_features		= nvme_nvm_get_features,
+	.set_responsibility	= nvme_nvm_set_responsibility,
+	.get_l2p_tbl		= nvme_nvm_get_l2p_tbl,
 };
 
 static struct blk_mq_ops nvme_mq_ops = {
