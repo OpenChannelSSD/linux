@@ -1548,17 +1548,10 @@ out:
 static int nvme_nvm_get_features(struct request_queue *q,
 						struct nvm_get_features *gf)
 {
-	gf->rsp[0] = (1 << NVM_RSP_L2P);
-	gf->rsp[0] |= (1 << NVM_RSP_P2L);
-	gf->rsp[0] |= (1 << NVM_RSP_GC);
+	gf->rsp[0] = 0;
+
 	return 0;
 }
-
-static int nvme_nvm_set_rsp(struct request_queue *q, u8 rsp, u8 val)
-{
-	return NVM_RID_NOT_CHANGEABLE | NVM_DNR;
-}
-
 
 static int nvme_nvm_get_l2p_tbl(struct request_queue *q, u64 slba, u64 nlb,
 				nvm_l2p_tbl_init_fn *init_cb)
@@ -1625,7 +1618,6 @@ static struct blk_mq_ops nvme_mq_admin_ops = {
 static struct lightnvm_dev_ops nvme_nvm_dev_ops = {
 	.identify		= nvme_nvm_id,
 	.get_features		= nvme_nvm_get_features,
-	.set_responsibility	= nvme_nvm_set_rsp,
 	.get_l2p_tbl		= nvme_nvm_get_l2p_tbl,
 };
 

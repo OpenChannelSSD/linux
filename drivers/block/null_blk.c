@@ -398,15 +398,9 @@ static int null_nvm_id(struct request_queue *q, struct nvm_id *id)
 static int null_nvm_get_features(struct request_queue *q,
 						struct nvm_get_features *gf)
 {
-	gf->rsp[0] = (1 << NVM_RSP_L2P);
-	gf->rsp[0] |= (1 << NVM_RSP_P2L);
-	gf->rsp[0] |= (1 << NVM_RSP_GC);
-	return 0;
-}
+	gf->rsp[0] = 0;
 
-static int null_nvm_set_rsp(struct request_queue *q, u8 rsp, u8 val)
-{
-	return NVM_RID_NOT_CHANGEABLE | NVM_DNR;
+	return 0;
 }
 
 static int null_queue_rq(struct blk_mq_hw_ctx *hctx,
@@ -448,7 +442,6 @@ static int null_init_hctx(struct blk_mq_hw_ctx *hctx, void *data,
 static struct lightnvm_dev_ops null_nvm_dev_ops = {
 	.identify		= null_nvm_id,
 	.get_features		= null_nvm_get_features,
-	.set_responsibility	= null_nvm_set_rsp,
 };
 
 static struct blk_mq_ops null_mq_ops = {

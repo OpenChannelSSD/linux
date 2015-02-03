@@ -485,6 +485,31 @@ done:
 	return ret;
 }
 
+int nvm_validate_features(struct nvm_dev *dev)
+{
+	struct nvm_get_features gf;
+	int ret;
+
+	ret = dev->ops->get_features(dev->q, &gf);
+	if (ret)
+		return ret;
+
+	/* Only default configuration is supported.
+	 * I.e. L2P, No ondrive GC and drive performs ECC */
+	if (gf.rsp[0] != 0)
+		return -EINVAL;
+
+	return 0;
+}
+
+int nvm_validate_responsibility(struct nvm_dev *dev)
+{
+	if (!dev->ops->set_responsibility)
+		return 0;
+
+	return dev->ops->set_responsibility(dev->q, 0);
+}
+
 int nvm_init(struct nvm_dev *nvm)
 {
 	struct nvm_stor *s;
@@ -528,6 +553,18 @@ int nvm_init(struct nvm_dev *nvm)
 	pr_debug("lightnvm dev: ver %u type %u chnls %u max qdepth: %i\n",
 			s->id.ver_id, s->id.nvm_type, s->id.nchannels,
 			max_qdepth);
+
+	ret = nvm_validate_features(nvm);
+	if (ret) {
+		pr_err("lightnvm: disk features are not supported.");
+		goto err;
+	}
+
+	ret = nvm_validate_responsibility(nvm);
+	if (ret) {
+		pr_err("lightnvm: disk responsibilities are not supported.");
+		goto err;
+	}
 
 	ret = nvm_stor_init(s, max_qdepth);
 	if (ret) {

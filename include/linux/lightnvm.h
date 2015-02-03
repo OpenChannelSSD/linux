@@ -8,9 +8,8 @@
 enum {
 	/* HW Responsibilities */
 	NVM_RSP_L2P	= 0x00,
-	NVM_RSP_P2L	= 0x01,
-	NVM_RSP_GC	= 0x02,
-	NVM_RSP_ECC	= 0x03,
+	NVM_RSP_GC	= 0x01,
+	NVM_RSP_ECC	= 0x02,
 
 	/* Physical NVM Type */
 	NVM_NVMT_BLK	= 0,
@@ -21,9 +20,8 @@ enum {
 	NVM_IOSCHED_CHIP	= 1,
 
 	/* Status codes */
-	NVM_SUCCESS		= 0x0000,
-	NVM_RID_NOT_CHANGEABLE	= 0x010e,
-	NVM_DNR			= 0x4000,
+	NVM_SUCCESS		= 0,
+	NVM_RSP_NOT_CHANGEABLE	= 1,
 };
 
 struct nvm_id_chnl {
@@ -60,7 +58,7 @@ typedef int (nvm_l2p_tbl_init_fn)(struct request_queue *, u64, u64, __le64 *);
 typedef int (nvm_id_fn)(struct request_queue *, struct nvm_id *);
 typedef int (nvm_get_features_fn)(struct request_queue *,
 				  struct nvm_get_features *);
-typedef int (nvm_set_rsp_fn)(struct request_queue *, u8 rsp, u8 val);
+typedef int (nvm_set_rsp_fn)(struct request_queue *, int);
 typedef int (nvm_get_l2p_tbl_fn)(struct request_queue *, u64, u64,
 				 nvm_l2p_tbl_init_fn *);
 typedef int (nvm_erase_blk_fn)(struct request_queue *, sector_t);

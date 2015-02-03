@@ -28,7 +28,7 @@ int blk_lightnvm_register(struct request_queue *q, struct lightnvm_dev_ops *ops)
 	struct nvm_dev *dev;
 	int ret;
 
-	if (!ops->identify || !ops->get_features || !ops->set_responsibility)
+	if (!ops->identify || !ops->get_features)
 		return -EINVAL;
 
 	/* TODO: LightNVM does not yet support multi-page IOs. */
