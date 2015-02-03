@@ -386,11 +386,9 @@ static int nvm_stor_init(struct nvm_stor *s, int max_qdepth)
 	return 0;
 }
 
-static int nvm_l2p_tbl_init(struct request_queue *q, u64 slba, u64 nlb,
-							__le64 *tbl_sgmt)
+static int nvm_l2p_update(u64 slba, u64 nlb, u64 *entries, void *private)
 {
-	struct nvm_dev *dev = q->queuedata;
-	struct nvm_stor *s = dev->stor;
+	struct nvm_stor *s = (struct nvm_stor *)private;
 	struct nvm_addr *addr = s->trans_map + slba;
 	struct nvm_rev_addr *raddr = s->rev_trans_map;
 	sector_t max_pages = s->nr_pages * (s->sector_size >> 9);
@@ -404,10 +402,11 @@ static int nvm_l2p_tbl_init(struct request_queue *q, u64 slba, u64 nlb,
 
 	for (i = 0; i < nlb; i++) {
 		/* notice that the values are 1-indexed. 0 is unmapped */
-		u64 pba = le64_to_cpu(tbl_sgmt[i]);
+		u64 pba = le64_to_cpu(entries[i]);
 		/* LNVM treats address-spaces as silos, LBA and PBA are
 		 * equally large and zero-indexed. */
 		if (unlikely(pba >= max_pages && pba != U64_MAX)) {
+			printk("%llu %llu %llu %llu\n", pba, max_pages, slba, s->nr_pages);
 			pr_err("lightnvm: L2P data entry is out of bounds!\n");
 			return -EINVAL;
 		}
@@ -594,7 +593,7 @@ int nvm_init(struct nvm_dev *nvm)
 
 	if (nvm->ops->get_l2p_tbl) {
 		ret = nvm->ops->get_l2p_tbl(nvm->q, 0, s->nr_pages,
-							nvm_l2p_tbl_init);
+							nvm_l2p_update, s);
 		if (ret) {
 			pr_err("lightnvm: could not read L2P table.\n");
 			goto err;

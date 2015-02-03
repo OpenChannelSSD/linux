@@ -1005,7 +1005,8 @@ int lnvm_identify(struct nvme_dev *dev, u32 chnl_off, dma_addr_t dma_addr)
 	return nvme_submit_admin_cmd(dev, &c, NULL);
 }
 
-int lnvm_get_features(struct nvme_dev *dev, unsigned nsid, dma_addr_t dma_addr)
+int nvme_nvm_get_features_cmd(struct nvme_dev *dev, unsigned nsid,
+							dma_addr_t dma_addr)
 {
 	struct nvme_command c;
 
@@ -1017,7 +1018,7 @@ int lnvm_get_features(struct nvme_dev *dev, unsigned nsid, dma_addr_t dma_addr)
 	return nvme_submit_admin_cmd(dev, &c, NULL);
 }
 
-int lnvm_set_responsibility(struct nvme_dev *dev, unsigned nsid,
+int nvme_nvm_set_responsibility_cmd(struct nvme_dev *dev, unsigned nsid,
 							dma_addr_t dma_addr)
 {
 	struct nvme_command c;
@@ -1030,8 +1031,8 @@ int lnvm_set_responsibility(struct nvme_dev *dev, unsigned nsid,
 	return nvme_submit_admin_cmd(dev, &c, NULL);
 }
 
-int lnvm_get_l2p_tbl(struct nvme_dev *dev, unsigned nsid, u64 slba, u32 nlb,
-					u16 dma_npages, struct nvme_iod *iod)
+int nvme_nvm_get_l2p_tbl_cmd(struct nvme_dev *dev, unsigned nsid, u64 slba,
+				u32 nlb, u16 dma_npages, struct nvme_iod *iod)
 {
 	struct nvme_command c;
 	unsigned length;
@@ -1045,9 +1046,8 @@ int lnvm_get_l2p_tbl(struct nvme_dev *dev, unsigned nsid, u64 slba, u32 nlb,
 	c.lnvm_l2p.prp1_len = cpu_to_le16(dma_npages);
 
 	length = nvme_setup_prps(dev, iod, iod->length, GFP_KERNEL);
-	if ((length >> 12) != dma_npages) {
+	if ((length >> 12) != dma_npages)
 		return -ENOMEM;
-	}
 
 	c.common.prp1 = cpu_to_le64(sg_dma_address(iod->sg));
 	c.common.prp2 = cpu_to_le64(iod->first_dma);
@@ -1554,27 +1554,25 @@ static int nvme_nvm_get_features(struct request_queue *q,
 }
 
 static int nvme_nvm_get_l2p_tbl(struct request_queue *q, u64 slba, u64 nlb,
-				nvm_l2p_tbl_init_fn *init_cb)
+				nvm_l2p_update_fn *update_l2p, void *private)
 {
 	struct nvme_ns *ns = q->queuedata;
 	struct nvme_dev *dev = ns->dev;
 	struct pci_dev *pdev = dev->pci_dev;
-	struct nvme_iod *iod;
 	static const u16 dma_npages = 256U;
 	static const u32 length = dma_npages * PAGE_SIZE;
-
+	u64 nlb_pr_dma = length / sizeof(u64);
+	struct nvme_iod *iod;
 	u64 cmd_slba = slba;
-	u64 nlb_pr_dma;
 	dma_addr_t dma_addr;
-	void *mem;
+	void *entries;
 	int res = 0;
 
-	nlb_pr_dma = length / sizeof(u64);
-	mem = dma_alloc_coherent(&pdev->dev, length, &dma_addr, GFP_KERNEL);
-	if (!mem)
+	entries = dma_alloc_coherent(&pdev->dev, length, &dma_addr, GFP_KERNEL);
+	if (!entries)
 		return -ENOMEM;
 
-	iod = nvme_get_dma_iod(dev, mem, length);
+	iod = nvme_get_dma_iod(dev, entries, length);
 	if (!iod) {
 		res = -ENOMEM;
 		goto out;
@@ -1583,17 +1581,20 @@ static int nvme_nvm_get_l2p_tbl(struct request_queue *q, u64 slba, u64 nlb,
 	while (nlb) {
 		u64 cmd_nlb = min_t(u64, nlb_pr_dma, nlb);
 
-		res = lnvm_get_l2p_tbl(dev, ns->ns_id, cmd_slba, (u32)cmd_nlb,
-							dma_npages, iod);
+		res = nvme_nvm_get_l2p_tbl_cmd(dev, ns->ns_id, cmd_slba,
+						(u32)cmd_nlb, dma_npages, iod);
 		if (res) {
-			dev_err(&pdev->dev, "L2P table transfer failed (%d)\n", res);
+			dev_err(&pdev->dev, "L2P table transfer failed (%d)\n",
+									res);
 			res = -EIO;
 			goto free_iod;
 		}
-		if (init_cb(q, cmd_slba, cmd_nlb, (__le64*)mem)) {
+
+		if (update_l2p(cmd_slba, cmd_nlb, entries, private)) {
 			res = -EINTR;
 			goto free_iod;
 		}
+
 		cmd_slba += cmd_nlb;
 		nlb -= cmd_nlb;
 	}
@@ -1602,7 +1603,8 @@ free_iod:
 	dma_unmap_sg(&pdev->dev, iod->sg, 1, DMA_FROM_DEVICE);
 	nvme_free_iod(dev, iod);
 out:
-	dma_free_coherent(&pdev->dev, 4096 * dma_npages, mem, dma_addr);
+	dma_free_coherent(&pdev->dev, PAGE_SIZE * dma_npages, entries,
+								dma_addr);
 	return res;
 }
 
@@ -1616,9 +1618,9 @@ static struct blk_mq_ops nvme_mq_admin_ops = {
 };
 
 static struct lightnvm_dev_ops nvme_nvm_dev_ops = {
-	.identify		= nvme_nvm_id,
-	.get_features		= nvme_nvm_get_features,
-	.get_l2p_tbl		= nvme_nvm_get_l2p_tbl,
+	.identify	= nvme_nvm_id,
+	.get_features	= nvme_nvm_get_features,
+	.get_l2p_tbl	= nvme_nvm_get_l2p_tbl,
 };
 
 static struct blk_mq_ops nvme_mq_ops = {

@@ -54,13 +54,13 @@ struct nvm_get_features {
 	u64	ext[4];
 };
 
-typedef int (nvm_l2p_tbl_init_fn)(struct request_queue *, u64, u64, __le64 *);
+typedef int (nvm_l2p_update_fn)(u64, u64, u64 *, void *);
 typedef int (nvm_id_fn)(struct request_queue *, struct nvm_id *);
 typedef int (nvm_get_features_fn)(struct request_queue *,
 				  struct nvm_get_features *);
 typedef int (nvm_set_rsp_fn)(struct request_queue *, int);
 typedef int (nvm_get_l2p_tbl_fn)(struct request_queue *, u64, u64,
-				 nvm_l2p_tbl_init_fn *);
+				 nvm_l2p_update_fn *, void *);
 typedef int (nvm_erase_blk_fn)(struct request_queue *, sector_t);
 
 struct lightnvm_dev_ops {
