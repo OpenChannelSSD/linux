@@ -40,7 +40,7 @@ static void invalidate_block_page(struct nvm_stor *s, struct nvm_addr *p)
 	struct nvm_block *block = p->block;
 	unsigned int page_offset;
 
-	NVM_ASSERT(spin_is_locked(&s->rev_lock));
+	BUG_ON(!spin_is_locked(&s->rev_lock));
 	if (!block)
 		return;
 
@@ -54,7 +54,7 @@ static void invalidate_block_page(struct nvm_stor *s, struct nvm_addr *p)
 static inline void __nvm_page_invalidate(struct nvm_stor *s,
 							struct nvm_addr *gp)
 {
-	NVM_ASSERT(spin_is_locked(&s->rev_lock));
+	BUG_ON(!spin_is_locked(&s->rev_lock));
 	if (gp->addr == ADDR_EMPTY)
 		return;
 

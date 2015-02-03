@@ -26,12 +26,6 @@
 #include <linux/blk-mq.h>
 #include <linux/slab.h>
 
-#ifdef NVM_DEBUG
-#define NVM_ASSERT(c) BUG_ON((c) == 0)
-#else
-#define NVM_ASSERT(c)
-#endif
-
 #define NVM_MSG_PREFIX "nvm"
 #define ADDR_EMPTY (~0ULL)
 #define LTOP_POISON 0xD3ADB33F
