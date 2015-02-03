@@ -175,7 +175,8 @@ static void nvm_greedy_kick(struct nvm_stor *s)
 
 void nvm_greedy_block_gc(struct work_struct *work)
 {
-	struct greedy_block *block_data = container_of(work, struct greedy_block, ws_gc);
+	struct greedy_block *block_data = container_of(work,
+						struct greedy_block, ws_gc);
 	struct nvm_block *block = block_data->block;
 	struct nvm_stor *s = block->lun->s;
 
@@ -194,6 +195,7 @@ static struct greedy_block *gblock_max_invalid(struct greedy_block *ga,
 {
 	struct nvm_block *a = ga->block;
 	struct nvm_block *b = gb->block;
+
 	BUG_ON(!a || !b);
 
 	if (a->nr_invalid_pages == b->nr_invalid_pages)
@@ -236,10 +238,8 @@ static void nvm_greedy_lun_gc(struct work_struct *work)
 		struct greedy_block *gblock = block_prio_find_max(glun);
 		struct nvm_block *block = gblock->block;
 
-		if (!block->nr_invalid_pages) {
-			//pr_err("nvm: no invalid pages");
+		if (!block->nr_invalid_pages)
 			break;
-		}
 
 		list_del_init(&gblock->prio);
 
@@ -258,14 +258,16 @@ static void nvm_greedy_lun_gc(struct work_struct *work)
 
 static void nvm_greedy_queue_gc(struct work_struct *work)
 {
-	struct greedy_block *gblock = container_of(work, struct greedy_block, ws_queue_gc);
+	struct greedy_block *gblock = container_of(work, struct greedy_block,
+								ws_queue_gc);
 	struct nvm_lun *lun = gblock->block->lun;
 	struct greedy_lun *glun = lun->gc_private;
 
 	spin_lock(&lun->lock);
 	list_add_tail(&gblock->prio, &glun->prio_list);
 	spin_unlock(&lun->lock);
-	pr_debug("nvm: block '%d' is full, allow GC (DONE)\n", gblock->block->id);
+	pr_debug("nvm: block '%d' is full, allow GC (DONE)\n",
+							gblock->block->id);
 }
 
 static void nvm_greedy_queue(struct nvm_block *block)
@@ -273,6 +275,7 @@ static void nvm_greedy_queue(struct nvm_block *block)
 	struct greedy_block *gblock = greedy_block(block);
 	struct nvm_lun *lun = block->lun;
 	struct nvm_stor *s = lun->s;
+
 	pr_debug("nvm: block '%d' is full, allow GC (sched)\n", block->id);
 
 	queue_work(s->kgc_wq, &gblock->ws_queue_gc);
@@ -285,12 +288,15 @@ static void nvm_greedy_free(struct nvm_stor *s)
 
 	nvm_for_each_lun(s, lun, i) {
 		struct greedy_lun *glun = greedy_lun(lun);
+
 		if (!glun || !glun->block_mem)
 			break;
 		vfree(glun->block_mem);
 	}
 
-	/* All per-lun GC-data space was allocated in one go, so this suffices */
+	/*
+	 * All per-lun GC-data space was allocated in one go, so this is enough
+	 */
 	if (s->nr_luns && s->luns && s->luns[0].gc_private)
 		kfree(s->luns[0].gc_private);
 }
@@ -303,10 +309,8 @@ static int nvm_greedy_init(struct nvm_stor *s)
 
 	lun_mem = kcalloc(s->nr_luns, sizeof(struct greedy_lun),
 						GFP_KERNEL);
-	if (!lun_mem) {
-		pr_err("lightnvm: failed allocating luns for greedy GC\n");
+	if (!lun_mem)
 		return -ENOMEM;
-	}
 
 	nvm_for_each_lun(s, lun, i) {
 		struct greedy_lun *glun = &lun_mem[i];
@@ -318,10 +322,9 @@ static int nvm_greedy_init(struct nvm_stor *s)
 		INIT_LIST_HEAD(&glun->prio_list);
 		INIT_WORK(&glun->ws_gc, nvm_greedy_lun_gc);
 
-		glun->block_mem = vzalloc(sizeof(struct greedy_block) * s->nr_blks_per_lun);
+		glun->block_mem = vzalloc(sizeof(struct greedy_block) *
+							s->nr_blks_per_lun);
 		if (!glun->block_mem) {
-			pr_err("nvm: failed allocating blocks for greedy "
-				"GC (in lun %d of %d)!\n", i, s->nr_luns);
 			nvm_greedy_free(s);
 			return -ENOMEM;
 		}
@@ -347,8 +350,8 @@ static void nvm_greedy_exit(struct nvm_stor *s)
 }
 
 struct nvm_gc_type nvm_gc_greedy = {
-	.name 		= "greedy",
-	.version 	= {1, 0, 0},
+	.name		= "greedy",
+	.version	= {1, 0, 0},
 
 	.gc_timer	= nvm_gc_timer,
 	.queue		= nvm_greedy_queue,

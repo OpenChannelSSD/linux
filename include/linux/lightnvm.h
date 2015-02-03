@@ -85,19 +85,18 @@ struct nvm_get_features {
 struct nvm_dev;
 struct nvm_stor;
 
-typedef int (nvm_l2p_tbl_init_fn)(struct nvm_stor *s, u64 slba, u64 nlb,
-							__le64 *tbl_segment);
-typedef int (nvm_id_fn)(struct request_queue *q, struct nvm_id *id);
-typedef int (nvm_get_features_fn)(struct request_queue *q, struct nvm_get_features *);
-typedef int (nvm_set_rsp_fn)(struct request_queue *q, u8 rsp, u8 val);
-typedef int (nvm_get_l2p_tbl_fn)(struct request_queue *q, u64 slba, u64 nlb,
-						nvm_l2p_tbl_init_fn *init_cb,
-						struct nvm_stor *s);
+typedef int (nvm_l2p_tbl_init_fn)(struct nvm_stor *, u64, u64, __le64 *);
+typedef int (nvm_id_fn)(struct request_queue *, struct nvm_id *);
+typedef int (nvm_get_features_fn)(struct request_queue *,
+				  struct nvm_get_features *);
+typedef int (nvm_set_rsp_fn)(struct request_queue *, u8 rsp, u8 val);
+typedef int (nvm_get_l2p_tbl_fn)(struct request_queue *, u64, u64,
+				 nvm_l2p_tbl_init_fn *, struct nvm_stor *);
 typedef int (nvm_erase_blk_fn)(struct request_queue *, sector_t);
 
 struct lightnvm_dev_ops {
 	nvm_id_fn		*identify;
-	nvm_get_features_fn 	*get_features;
+	nvm_get_features_fn	*get_features;
 	nvm_set_rsp_fn		*set_responsibility;
 	nvm_get_l2p_tbl_fn	*get_l2p_tbl;
 

@@ -2,7 +2,7 @@
  * blk-lightnvm.c - Block layer LightNVM Open-channel SSD integration
  *
  * Copyright (C) 2014 IT University of Copenhagen
- * Written by: Matias Bjorling <mabj@itu.dk>
+ * Initial release: Matias Bjorling <mabj@itu.dk>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License version
@@ -25,32 +25,32 @@
 
 int blk_lightnvm_register(struct request_queue *q, struct lightnvm_dev_ops *ops)
 {
-	struct nvm_dev *nvm;
+	struct nvm_dev *dev;
 	int ret;
 
 	if (!ops->identify || !ops->get_features || !ops->set_responsibility ||
-							!ops->get_l2p_tbl)
+	    !ops->get_l2p_tbl)
 		return -EINVAL;
 
 	/* TODO: LightNVM does not yet support multi-page IOs. */
 	blk_queue_max_hw_sectors(q, queue_logical_block_size(q) >> 9);
 
-	nvm = kmalloc(sizeof(struct nvm_dev), GFP_KERNEL);
-	if (!nvm)
+	dev = kmalloc(sizeof(struct nvm_dev), GFP_KERNEL);
+	if (!dev)
 		return -ENOMEM;
 
-	nvm->q = q;
-	nvm->ops = ops;
+	dev->q = q;
+	dev->ops = ops;
 
-	ret = nvm_init(nvm);
+	ret = nvm_init(dev);
 	if (ret)
 		goto err_init;
 
-	q->nvm = nvm;
+	q->nvm = dev;
 
 	return 0;
 err_init:
-	kfree(nvm);
+	kfree(dev);
 	return ret;
 }
 EXPORT_SYMBOL(blk_lightnvm_register);

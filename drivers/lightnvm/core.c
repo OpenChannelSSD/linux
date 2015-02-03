@@ -51,7 +51,8 @@ static void invalidate_block_page(struct nvm_stor *s, struct nvm_addr *p)
 	spin_unlock(&block->lock);
 }
 
-static inline void __nvm_page_invalidate(struct nvm_stor *s, struct nvm_addr *gp)
+static inline void __nvm_page_invalidate(struct nvm_stor *s,
+							struct nvm_addr *gp)
 {
 	NVM_ASSERT(spin_is_locked(&s->rev_lock));
 	if (gp->addr == ADDR_EMPTY)
@@ -87,9 +88,8 @@ void nvm_update_map(struct nvm_stor *s, sector_t l_addr, struct nvm_addr *p,
 
 	gp = &s->trans_map[l_addr];
 	spin_lock(&s->rev_lock);
-	if (gp->block) {
+	if (gp->block)
 		__nvm_page_invalidate(s, gp);
-	}
 
 	gp->addr = p->addr;
 	gp->block = p->block;

@@ -449,9 +449,9 @@ static int __nvm_lock_laddr(struct nvm_stor *s, sector_t laddr,
 	return 0;
 }
 
-static int inline nvm_lock_laddr(struct nvm_stor *s, sector_t laddr,
-				  unsigned pages,
-				  struct nvm_inflight_rq *r)
+static inline int nvm_lock_laddr(struct nvm_stor *s, sector_t laddr,
+				 unsigned pages,
+				 struct nvm_inflight_rq *r)
 {
 	BUG_ON((laddr + pages) > s->nr_pages);
 

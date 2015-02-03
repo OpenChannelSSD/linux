@@ -83,6 +83,21 @@ void nvm_unregister_target(struct nvm_target_type *tt)
 	up_write(&_lock);
 }
 
+int nvm_discard_rq(struct nvm_dev *dev, struct request *rq)
+{
+	sector_t npages = blk_rq_bytes(rq) / EXPOSED_PAGE_SIZE;
+	sector_t l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
+	struct nvm_stor *s = dev->stor;
+
+	nvm_lock_rq(s, rq);
+	nvm_invalidate_range(s, l_addr, npages);
+	nvm_unlock_rq(s, rq);
+
+	rq->cmd_flags |= REQ_NVM;
+	blk_mq_end_request(rq, 0);
+	return BLK_MQ_RQ_QUEUE_DONE;
+}
+
 int __nvm_map_rq(struct nvm_dev *dev, struct request *rq)
 {
 	struct nvm_stor *s = dev->stor;
@@ -103,21 +118,6 @@ int __nvm_map_rq(struct nvm_dev *dev, struct request *rq)
 	return ret;
 }
 
-int nvm_discard_rq(struct nvm_dev *dev, struct request *rq)
-{
-	sector_t npages = blk_rq_bytes(rq) / EXPOSED_PAGE_SIZE;
-	sector_t l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
-	struct nvm_stor *s = dev->stor;
-
-	nvm_lock_rq(s, rq);
-	nvm_invalidate_range(s, l_addr, npages);
-	nvm_unlock_rq(s, rq);
-
-	rq->cmd_flags |= REQ_NVM;
-	blk_mq_end_request(rq, 0);
-	return BLK_MQ_RQ_QUEUE_DONE;
-}
-
 int nvm_map_rq(struct nvm_dev *dev, struct request *rq)
 {
 	if (unlikely(rq->cmd_flags & REQ_NVM_MAPPED)) {
@@ -132,7 +132,8 @@ int nvm_map_rq(struct nvm_dev *dev, struct request *rq)
 }
 EXPORT_SYMBOL_GPL(nvm_map_rq);
 
-void nvm_complete_request(struct nvm_dev *nvm_dev, struct request *rq, int error)
+void nvm_complete_request(struct nvm_dev *nvm_dev, struct request *rq,
+								int error)
 {
 	if (rq->cmd_flags & REQ_DISCARD)
 		return;
@@ -140,8 +141,7 @@ void nvm_complete_request(struct nvm_dev *nvm_dev, struct request *rq, int error
 	if (rq->cmd_flags & (REQ_NVM|REQ_NVM_MAPPED))
 		nvm_endio(nvm_dev, rq, error);
 
-	if (!(rq->cmd_flags & REQ_NVM))
-	{
+	if (!(rq->cmd_flags & REQ_NVM)) {
 		if (rq->cmd_flags & REQ_NVM_NO_INFLIGHT)
 			BUG();
 		pr_info("lightnvm: request outside lightnvm detected.\n");
@@ -303,7 +303,7 @@ static int nvm_aps_init(struct nvm_stor *s)
 	s->nr_aps = s->nr_aps_per_lun * s->nr_luns;
 	s->aps = kcalloc(s->nr_aps, sizeof(struct nvm_ap), GFP_KERNEL);
 	if (!s->aps)
-		return -ENOMEM;;
+		return -ENOMEM;
 
 	nvm_for_each_ap(s, ap, i) {
 		spin_lock_init(&ap->lock);
@@ -343,7 +343,7 @@ static int nvm_stor_map_init(struct nvm_stor *s)
 	s->rev_trans_map = vmalloc(sizeof(struct nvm_rev_addr)
 							* s->nr_pages);
 	if (!s->rev_trans_map)
-		return -ENOMEM;;
+		return -ENOMEM;
 
 	for (i = 0; i < s->nr_pages; i++) {
 		struct nvm_addr *p = &s->trans_map[i];
@@ -375,6 +375,7 @@ static int nvm_stor_init(struct nvm_stor *s, int max_qdepth)
 
 	for (i = 0; i < NVM_INFLIGHT_PARTITIONS; i++) {
 		struct nvm_inflight *map = &s->inflight_map[i];
+
 		spin_lock_init(&map->lock);
 		INIT_LIST_HEAD(&map->reqs);
 	}
@@ -395,17 +396,17 @@ static int nvm_l2p_tbl_init(struct nvm_stor *s, u64 slba, u64 nlb,
 	u64 i;
 
 	if (unlikely(elba > s->nr_pages)) {
-		pr_err("lightnvm: L2P data from device is out of bounds - stopping!\n");
+		pr_err("lightnvm: L2P data from device is out of bounds!\n");
 		return -EINVAL;
 	}
 
 	for (i = 0; i < nlb; i++) {
 		/* notice that the values are 1-indexed. 0 is unmapped */
 		u64 pba = le64_to_cpu(tbl_sgmt[i]);
-		/* LNVM treats address-spaces as silos, i.e. LBA and PBA are
+		/* LNVM treats address-spaces as silos, LBA and PBA are
 		 * equally large and zero-indexed. */
 		if (unlikely(pba >= max_pages && pba != U64_MAX)) {
-			pr_err("lightnvm: L2P data entry is out of bounds - stopping!\n");
+			pr_err("lightnvm: L2P data entry is out of bounds!\n");
 			return -EINVAL;
 		}
 
@@ -415,6 +416,7 @@ static int nvm_l2p_tbl_init(struct nvm_stor *s, u64 slba, u64 nlb,
 		addr[i].addr = pba - 1;
 		raddr[pba - 1].addr = slba + i;
 	}
+
 	return 0;
 }
 
@@ -551,7 +553,8 @@ int nvm_init(struct nvm_dev *nvm)
 		goto err;
 	}
 
-	ret = nvm->ops->get_l2p_tbl(nvm->q, 0, s->nr_pages, nvm_l2p_tbl_init, s);
+	ret = nvm->ops->get_l2p_tbl(nvm->q, 0, s->nr_pages, nvm_l2p_tbl_init,
+									s);
 	if (ret) {
 		pr_err("lightnvm: could not read L2P table.\n");
 		goto err;

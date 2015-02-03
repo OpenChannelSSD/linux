@@ -21,7 +21,8 @@ struct nvm_block *nvm_lun_get_block(struct nvm_lun *lun, int is_gc)
 	spin_lock_irqsave(&lun->lock, flags);
 
 	if (list_empty(&lun->free_list)) {
-		pr_err_ratelimited("lightnvm: lun %u have no free pages available", lun->id);
+		pr_err_ratelimited("lightnvm: lun %u have no free pages available",
+								lun->id);
 		spin_unlock_irqrestore(&lun->lock, flags);
 		goto out;
 	}
