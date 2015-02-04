@@ -1519,6 +1519,8 @@ extern bool blk_integrity_merge_bio(struct request_queue *, struct request *,
 static inline
 struct blk_integrity *bdev_get_integrity(struct block_device *bdev)
 {
+	if (unlikely(!bdev))
+		return NULL;
 	return bdev->bd_disk->integrity;
 }
 
