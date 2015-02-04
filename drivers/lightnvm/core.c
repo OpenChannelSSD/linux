@@ -2,7 +2,7 @@
 #include <trace/events/block.h>
 #include "nvm.h"
 
-struct request *nvm_inflight_laddr_acquire(struct nvm_stor *s, sector_t laddr,
+struct request *nvm_inflight_laddr_acquire(struct nvm *s, sector_t laddr,
 					   unsigned int pages,
 					   spinlock_t *parent_lock)
 {
@@ -25,7 +25,7 @@ struct request *nvm_inflight_laddr_acquire(struct nvm_stor *s, sector_t laddr,
 	return rq;
 }
 
-void nvm_inflight_laddr_release(struct nvm_stor *s, struct request *rq)
+void nvm_inflight_laddr_release(struct nvm *s, struct request *rq)
 {
 	struct nvm_inflight_rq *inf;
 
@@ -35,7 +35,7 @@ void nvm_inflight_laddr_release(struct nvm_stor *s, struct request *rq)
 	blk_mq_free_request(rq);
 }
 
-static void invalidate_block_page(struct nvm_stor *s, struct nvm_addr *p)
+static void invalidate_block_page(struct nvm *s, struct nvm_addr *p)
 {
 	struct nvm_block *block = p->block;
 	unsigned int page_offset;
@@ -51,7 +51,7 @@ static void invalidate_block_page(struct nvm_stor *s, struct nvm_addr *p)
 	spin_unlock(&block->lock);
 }
 
-static inline void __nvm_page_invalidate(struct nvm_stor *s,
+static inline void __nvm_page_invalidate(struct nvm *s,
 							struct nvm_addr *gp)
 {
 	BUG_ON(!spin_is_locked(&s->rev_lock));
@@ -62,7 +62,7 @@ static inline void __nvm_page_invalidate(struct nvm_stor *s,
 	s->rev_trans_map[gp->addr].addr = ADDR_EMPTY;
 }
 
-void nvm_invalidate_range(struct nvm_stor *s, sector_t slba, unsigned len)
+void nvm_invalidate_range(struct nvm *s, sector_t slba, unsigned len)
 {
 	sector_t i;
 
@@ -77,7 +77,7 @@ void nvm_invalidate_range(struct nvm_stor *s, sector_t slba, unsigned len)
 	spin_unlock(&s->rev_lock);
 }
 
-void nvm_update_map(struct nvm_stor *s, sector_t l_addr, struct nvm_addr *p,
+void nvm_update_map(struct nvm *s, sector_t l_addr, struct nvm_addr *p,
 					int is_gc)
 {
 	struct nvm_addr *gp;
@@ -102,7 +102,7 @@ void nvm_update_map(struct nvm_stor *s, sector_t l_addr, struct nvm_addr *p,
 /* requires lun->lock lock */
 void nvm_reset_block(struct nvm_block *block)
 {
-	struct nvm_stor *s = block->lun->s;
+	struct nvm *s = block->lun->s;
 
 	spin_lock(&block->lock);
 	bitmap_zero(block->invalid_pages, s->nr_pages_per_blk);
@@ -147,7 +147,7 @@ void nvm_set_ap_cur(struct nvm_ap *ap, struct nvm_block *block)
 }
 
 /* Send erase command to device */
-int nvm_erase_block(struct nvm_stor *s, struct nvm_block *block)
+int nvm_erase_block(struct nvm *s, struct nvm_block *block)
 {
 	struct nvm_dev *dev = s->dev;
 
@@ -159,7 +159,7 @@ int nvm_erase_block(struct nvm_stor *s, struct nvm_block *block)
 
 void nvm_endio(struct nvm_dev *nvm_dev, struct request *rq, int err)
 {
-	struct nvm_stor *s = nvm_dev->stor;
+	struct nvm *s = nvm_dev->stor;
 	struct per_rq_data *pb = get_per_rq_data(nvm_dev, rq);
 	struct nvm_addr *p = pb->addr;
 	struct nvm_block *block = p->block;
@@ -185,7 +185,7 @@ void nvm_endio(struct nvm_dev *nvm_dev, struct request *rq, int err)
 }
 
 /* remember to lock l_add before calling nvm_submit_rq */
-void nvm_setup_rq(struct nvm_stor *s, struct request *rq, struct nvm_addr *p)
+void nvm_setup_rq(struct nvm *s, struct request *rq, struct nvm_addr *p)
 {
 	struct per_rq_data *pb;
 
@@ -193,7 +193,7 @@ void nvm_setup_rq(struct nvm_stor *s, struct request *rq, struct nvm_addr *p)
 	pb->addr = p;
 }
 
-int nvm_read_rq(struct nvm_stor *s, struct request *rq)
+int nvm_read_rq(struct nvm *s, struct request *rq)
 {
 	struct nvm_addr *p;
 	sector_t l_addr = nvm_get_laddr(rq);
@@ -215,7 +215,7 @@ int nvm_read_rq(struct nvm_stor *s, struct request *rq)
 	return BLK_MQ_RQ_QUEUE_OK;
 }
 
-int nvm_write_rq(struct nvm_stor *s, struct request *rq)
+int nvm_write_rq(struct nvm *s, struct request *rq)
 {
 	struct nvm_addr *p;
 	int is_gc = 0;

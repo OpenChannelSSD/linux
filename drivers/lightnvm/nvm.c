@@ -87,7 +87,7 @@ int nvm_discard_rq(struct nvm_dev *dev, struct request *rq)
 {
 	sector_t npages = blk_rq_bytes(rq) / EXPOSED_PAGE_SIZE;
 	sector_t l_addr = blk_rq_pos(rq) / NR_PHY_IN_LOG;
-	struct nvm_stor *s = dev->stor;
+	struct nvm *s = dev->stor;
 
 	nvm_lock_rq(s, rq);
 	nvm_invalidate_range(s, l_addr, npages);
@@ -100,7 +100,7 @@ int nvm_discard_rq(struct nvm_dev *dev, struct request *rq)
 
 int __nvm_map_rq(struct nvm_dev *dev, struct request *rq)
 {
-	struct nvm_stor *s = dev->stor;
+	struct nvm *s = dev->stor;
 	int ret;
 
 	trace_nvm_rq_map_begin(rq);
@@ -155,12 +155,12 @@ unsigned int nvm_cmd_size(void)
 }
 EXPORT_SYMBOL_GPL(nvm_cmd_size);
 
-static void nvm_aps_free(struct nvm_stor *s)
+static void nvm_aps_free(struct nvm *s)
 {
 	kfree(s->aps);
 }
 
-static void nvm_luns_free(struct nvm_stor *s)
+static void nvm_luns_free(struct nvm *s)
 {
 	struct nvm_lun *lun;
 	int i;
@@ -180,7 +180,7 @@ static void nvm_luns_free(struct nvm_stor *s)
 	kfree(s->luns);
 }
 
-static int nvm_luns_init(struct nvm_stor *s)
+static int nvm_luns_init(struct nvm *s)
 {
 	struct nvm_lun *lun;
 	struct nvm_id_chnl *chnl;
@@ -237,7 +237,7 @@ static int nvm_luns_init(struct nvm_stor *s)
  * comparing the logical to physical address with the physical address.
  * Returns 0 on free, otherwise 1 if in use
  */
-static int nvm_block_map(struct nvm_stor *s, struct nvm_block *block)
+static int nvm_block_map(struct nvm *s, struct nvm_block *block)
 {
 	int offset, used = 0;
 	struct nvm_addr *laddr;
@@ -265,7 +265,7 @@ static int nvm_block_map(struct nvm_stor *s, struct nvm_block *block)
 	return used;
 }
 
-static int nvm_blocks_init(struct nvm_stor *s)
+static int nvm_blocks_init(struct nvm *s)
 {
 	struct nvm_lun *lun;
 	struct nvm_block *block;
@@ -294,7 +294,7 @@ static int nvm_blocks_init(struct nvm_stor *s)
 	return 0;
 }
 
-static int nvm_aps_init(struct nvm_stor *s)
+static int nvm_aps_init(struct nvm *s)
 {
 	struct nvm_block *block;
 	struct nvm_ap *ap;
@@ -321,7 +321,7 @@ static int nvm_aps_init(struct nvm_stor *s)
 	return 0;
 }
 
-static void nvm_stor_free(struct nvm_stor *s)
+static void nvm_core_free(struct nvm *s)
 {
 	if (s->addr_pool)
 		mempool_destroy(s->addr_pool);
@@ -332,7 +332,7 @@ static void nvm_stor_free(struct nvm_stor *s)
 	kfree(s);
 }
 
-static int nvm_stor_map_init(struct nvm_stor *s)
+static int nvm_map_init(struct nvm *s)
 {
 	sector_t i;
 
@@ -356,7 +356,7 @@ static int nvm_stor_map_init(struct nvm_stor *s)
 	return 0;
 }
 
-static int nvm_stor_init(struct nvm_stor *s, int max_qdepth)
+static int nvm_core_init(struct nvm *s, int max_qdepth)
 {
 	int i;
 
@@ -388,7 +388,7 @@ static int nvm_stor_init(struct nvm_stor *s, int max_qdepth)
 
 static int nvm_l2p_update(u64 slba, u64 nlb, u64 *entries, void *private)
 {
-	struct nvm_stor *s = (struct nvm_stor *)private;
+	struct nvm *s = (struct nvm *)private;
 	struct nvm_addr *addr = s->trans_map + slba;
 	struct nvm_rev_addr *raddr = s->rev_trans_map;
 	sector_t max_pages = s->nr_pages * (s->sector_size >> 9);
@@ -427,7 +427,7 @@ void nvm_free_nvm_id(struct nvm_id *id)
 
 static void nvm_free(struct nvm_dev *nvm)
 {
-	struct nvm_stor *s = nvm->stor;
+	struct nvm *s = nvm->stor;
 
 	s = nvm->stor;
 
@@ -448,7 +448,7 @@ static void nvm_free(struct nvm_dev *nvm)
 
 	nvm_free_nvm_id(&s->id);
 
-	nvm_stor_free(s);
+	nvm_core_free(s);
 
 	down_write(&_lock);
 	if (_addr_cache)
@@ -456,7 +456,7 @@ static void nvm_free(struct nvm_dev *nvm)
 	up_write(&_lock);
 }
 
-static int nvm_targets_init(struct nvm_stor *s)
+static int nvm_targets_init(struct nvm *s)
 {
 	int ret;
 
@@ -510,7 +510,7 @@ int nvm_validate_responsibility(struct nvm_dev *dev)
 
 int nvm_init(struct nvm_dev *nvm)
 {
-	struct nvm_stor *s;
+	struct nvm *s;
 	int max_qdepth;
 	struct blk_mq_tag_set *tag_set = nvm->q->tag_set;
 	int ret = 0;
@@ -530,7 +530,7 @@ int nvm_init(struct nvm_dev *nvm)
 	}
 	up_write(&_lock);
 
-	s = kzalloc(sizeof(struct nvm_stor), GFP_KERNEL);
+	s = kzalloc(sizeof(struct nvm), GFP_KERNEL);
 	if (!s) {
 		ret = -ENOMEM;
 		goto err;
@@ -564,7 +564,7 @@ int nvm_init(struct nvm_dev *nvm)
 		goto err;
 	}
 
-	ret = nvm_stor_init(s, max_qdepth);
+	ret = nvm_core_init(s, max_qdepth);
 	if (ret) {
 		pr_err("lightnvm: could not initialize core structure.\n");
 		goto err;
@@ -584,7 +584,7 @@ int nvm_init(struct nvm_dev *nvm)
 	}
 	s->nr_pages = s->nr_luns * s->nr_blks_per_lun * s->nr_pages_per_blk;
 
-	ret = nvm_stor_map_init(s);
+	ret = nvm_map_init(s);
 	if (ret) {
 		pr_err("lightnvm: could not initialize nvm maps\n");
 		goto err;

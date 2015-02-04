@@ -11,7 +11,7 @@
  */
 struct nvm_block *nvm_lun_get_block(struct nvm_lun *lun, int is_gc)
 {
-	struct nvm_stor *s;
+	struct nvm *s;
 	struct nvm_block *block = NULL;
 
 	BUG_ON(!lun);
@@ -62,7 +62,7 @@ void nvm_lun_put_block(struct nvm_block *block)
 
 /* lookup the primary translation table. If there isn't an associated block to
  * the addr. We assume that there is no data and doesn't take a ref */
-struct nvm_addr *nvm_lookup_ltop(struct nvm_stor *s, sector_t laddr)
+struct nvm_addr *nvm_lookup_ltop(struct nvm *s, sector_t laddr)
 {
 	struct nvm_addr *gp, *p;
 
@@ -80,7 +80,7 @@ struct nvm_addr *nvm_lookup_ltop(struct nvm_stor *s, sector_t laddr)
 	return p;
 }
 
-static struct nvm_ap *__nvm_get_ap_rr(struct nvm_stor *s, int is_gc)
+static struct nvm_ap *__nvm_get_ap_rr(struct nvm *s, int is_gc)
 {
 	unsigned int i;
 	struct nvm_lun *lun, *max_free;
@@ -102,7 +102,7 @@ static struct nvm_ap *__nvm_get_ap_rr(struct nvm_stor *s, int is_gc)
 	return &s->aps[max_free->id];
 }
 
-static struct nvm_block *nvm_map_block_rr(struct nvm_stor *s, sector_t laddr,
+static struct nvm_block *nvm_map_block_rr(struct nvm *s, sector_t laddr,
 					  int is_gc)
 {
 	struct nvm_ap *ap;
@@ -124,7 +124,7 @@ static struct nvm_block *nvm_map_block_rr(struct nvm_stor *s, sector_t laddr,
  * Returns nvm_addr with the physical address and block. Remember to return to
  * s->addr_cache when request is finished.
  */
-static struct nvm_addr *nvm_map_page_rr(struct nvm_stor *s, sector_t laddr,
+static struct nvm_addr *nvm_map_page_rr(struct nvm *s, sector_t laddr,
 					int is_gc)
 {
 	struct nvm_addr *p;

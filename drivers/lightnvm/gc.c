@@ -20,7 +20,7 @@ struct greedy_lun {
 
 /**
  * nvm_gc_timer - default gc timer function.
- * @data: ptr to the 'nvm_stor' structure
+ * @data: ptr to the 'nvm' structure
  *
  * Description:
  *   NVM core configures a timer to call '.gc_timer', the default
@@ -29,7 +29,7 @@ struct greedy_lun {
  **/
 void nvm_gc_timer(unsigned long data)
 {
-	struct nvm_stor *s = (struct nvm_stor *)data;
+	struct nvm *s = (struct nvm *)data;
 
 	s->gc_ops->kick(s);
 
@@ -49,7 +49,7 @@ static void nvm_end_sync_bio(struct bio *bio, int error)
 
 /*
  * nvm_move_valid_pages -- migrate live data off the block
- * @s: the 'nvm_stor' structure
+ * @s: the 'nvm' structure
  * @block: the block from which to migrate live pages
  *
  * Description:
@@ -57,7 +57,7 @@ static void nvm_end_sync_bio(struct bio *bio, int error)
  *   pages off the block prior to erasing it. This function blocks
  *   further execution until the operation is complete.
  */
-static int nvm_move_valid_pages(struct nvm_stor *s, struct nvm_block *block)
+static int nvm_move_valid_pages(struct nvm *s, struct nvm_block *block)
 {
 	struct nvm_dev *dev = s->dev;
 	struct request_queue *q = dev->q;
@@ -157,12 +157,12 @@ static inline struct greedy_block *greedy_block(struct nvm_block *block)
 static void nvm_greedy_queue_lun_gc(struct nvm_lun *lun)
 {
 	struct greedy_lun *glun = greedy_lun(lun);
-	struct nvm_stor *s = lun->s;
+	struct nvm *s = lun->s;
 
 	queue_work(s->krqd_wq, &glun->ws_gc);
 }
 
-static void nvm_greedy_kick(struct nvm_stor *s)
+static void nvm_greedy_kick(struct nvm *s)
 {
 	struct nvm_lun *lun;
 	unsigned int i;
@@ -178,7 +178,7 @@ void nvm_greedy_block_gc(struct work_struct *work)
 	struct greedy_block *block_data = container_of(work,
 						struct greedy_block, ws_gc);
 	struct nvm_block *block = block_data->block;
-	struct nvm_stor *s = block->lun->s;
+	struct nvm *s = block->lun->s;
 
 	pr_debug("lightnvm: block '%d' being reclaimed\n", block->id);
 	if (nvm_move_valid_pages(s, block))
@@ -224,7 +224,7 @@ static void nvm_greedy_lun_gc(struct work_struct *work)
 {
 	struct greedy_lun *glun = container_of(work, struct greedy_lun, ws_gc);
 	struct nvm_lun *lun = glun->lun;
-	struct nvm_stor *s = lun->s;
+	struct nvm *s = lun->s;
 	unsigned int nr_blocks_need;
 
 	nr_blocks_need = lun->nr_blocks / GC_LIMIT_INVERSE;
@@ -274,14 +274,14 @@ static void nvm_greedy_queue(struct nvm_block *block)
 {
 	struct greedy_block *gblock = greedy_block(block);
 	struct nvm_lun *lun = block->lun;
-	struct nvm_stor *s = lun->s;
+	struct nvm *s = lun->s;
 
 	pr_debug("nvm: block '%d' is full, allow GC (sched)\n", block->id);
 
 	queue_work(s->kgc_wq, &gblock->ws_queue_gc);
 }
 
-static void nvm_greedy_free(struct nvm_stor *s)
+static void nvm_greedy_free(struct nvm *s)
 {
 	struct nvm_lun *lun;
 	int i;
@@ -301,7 +301,7 @@ static void nvm_greedy_free(struct nvm_stor *s)
 		kfree(s->luns[0].gc_private);
 }
 
-static int nvm_greedy_init(struct nvm_stor *s)
+static int nvm_greedy_init(struct nvm *s)
 {
 	struct greedy_lun *lun_mem;
 	struct nvm_lun *lun;
@@ -344,7 +344,7 @@ static int nvm_greedy_init(struct nvm_stor *s)
 	return 0;
 }
 
-static void nvm_greedy_exit(struct nvm_stor *s)
+static void nvm_greedy_exit(struct nvm *s)
 {
 	nvm_greedy_free(s);
 }

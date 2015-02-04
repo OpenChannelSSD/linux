@@ -6,7 +6,7 @@
 static ssize_t nvm_attr_free_blocks_show(struct nvm_dev *nvm, char *buf)
 {
 	char *buf_start = buf;
-	struct nvm_stor *stor = nvm->stor;
+	struct nvm *stor = nvm->stor;
 	struct nvm_lun *lun;
 	unsigned int i;
 
