@@ -62,28 +62,22 @@ void nvm_lun_put_block(struct nvm_block *block)
 
 /* lookup the primary translation table. If there isn't an associated block to
  * the addr. We assume that there is no data and doesn't take a ref */
-struct nvm_addr *nvm_lookup_ltop(struct nvm_stor *s, sector_t l_addr)
+struct nvm_addr *nvm_lookup_ltop(struct nvm_stor *s, sector_t laddr)
 {
 	struct nvm_addr *gp, *p;
 
-	BUG_ON(!(l_addr >= 0 && l_addr < s->nr_pages));
+	BUG_ON(!(laddr >= 0 && laddr < s->nr_pages));
 
 	p = mempool_alloc(s->addr_pool, GFP_ATOMIC);
 	if (!p)
 		return NULL;
 
-	gp = &s->trans_map[l_addr];
+	gp = &s->trans_map[laddr];
 
 	p->addr = gp->addr;
 	p->block = gp->block;
 
 	return p;
-}
-
-static inline unsigned int nvm_rq_sectors(const struct request *rq)
-{
-	/*TODO: remove hardcoding, query nvm_dev for setting*/
-	return blk_rq_bytes(rq) >> 9;
 }
 
 static struct nvm_ap *__nvm_get_ap_rr(struct nvm_stor *s, int is_gc)
@@ -108,12 +102,10 @@ static struct nvm_ap *__nvm_get_ap_rr(struct nvm_stor *s, int is_gc)
 	return &s->aps[max_free->id];
 }
 
-/*read/write RQ has locked addr range already*/
-
-static struct nvm_block *nvm_map_block_rr(struct nvm_stor *s, sector_t l_addr,
-					int is_gc)
+static struct nvm_block *nvm_map_block_rr(struct nvm_stor *s, sector_t laddr,
+					  int is_gc)
 {
-	struct nvm_ap *ap = NULL;
+	struct nvm_ap *ap;
 	struct nvm_block *block;
 
 	ap = __nvm_get_ap_rr(s, is_gc);
@@ -121,7 +113,7 @@ static struct nvm_block *nvm_map_block_rr(struct nvm_stor *s, sector_t l_addr,
 	spin_lock(&ap->lock);
 	block = s->type->lun_get_blk(ap->lun, is_gc);
 	spin_unlock(&ap->lock);
-	return block; /*NULL iff. no free blocks*/
+	return block;
 }
 
 /* Simple round-robin Logical to physical address translation.
@@ -132,7 +124,7 @@ static struct nvm_block *nvm_map_block_rr(struct nvm_stor *s, sector_t l_addr,
  * Returns nvm_addr with the physical address and block. Remember to return to
  * s->addr_cache when request is finished.
  */
-static struct nvm_addr *nvm_map_page_rr(struct nvm_stor *s, sector_t l_addr,
+static struct nvm_addr *nvm_map_page_rr(struct nvm_stor *s, sector_t laddr,
 					int is_gc)
 {
 	struct nvm_addr *p;
@@ -192,7 +184,7 @@ finished:
 
 	spin_unlock(&ap->lock);
 	if (p)
-		nvm_update_map(s, l_addr, p, is_gc);
+		nvm_update_map(s, laddr, p, is_gc);
 	return p;
 err:
 	spin_unlock(&ap->lock);
@@ -208,22 +200,6 @@ struct nvm_target_type nvm_target_rrpc = {
 	.map_page	= nvm_map_page_rr,
 	.map_block	= nvm_map_block_rr,
 
-	.write_rq	= nvm_write_rq,
-	.read_rq	= nvm_read_rq,
-
-	.lun_get_blk	= nvm_lun_get_block,
-	.lun_put_blk	= nvm_lun_put_block,
-};
-
-/* none target type, round robin, block-based FTL, and cost-based GC */
-struct nvm_target_type nvm_target_rrbc = {
-	.name		= "rrbc",
-	.version	= {1, 0, 0},
-	.lookup_ltop	= nvm_lookup_ltop,
-	.map_page	= NULL,
-	.map_block	= nvm_map_block_rr,
-
-	/*rewrite these to support multi-page writes*/
 	.write_rq	= nvm_write_rq,
 	.read_rq	= nvm_read_rq,
 
