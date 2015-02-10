@@ -152,12 +152,8 @@ struct nvme_id_ns {
 };
 
 enum {
-	NVME_CTRL_OACS_LIGHTNVM	= 1 << 3,
-};
-
-enum {
 	NVME_NS_FEAT_THIN	= 1 << 0,
-	NVME_NS_FEAT_LIGHTNVM	= 1 << 1,
+	NVME_NS_FEAT_LIGHTNVM	= 1 << 3,
 	NVME_LBAF_RP_BEST	= 0,
 	NVME_LBAF_RP_BETTER	= 1,
 	NVME_LBAF_RP_GOOD	= 2,

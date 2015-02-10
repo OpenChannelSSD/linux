@@ -2410,7 +2410,9 @@ static int nvme_dev_add(struct nvme_dev *dev)
 	struct nvme_id_ns *id_ns;
 	void *mem;
 	dma_addr_t dma_addr;
-	int shift = NVME_CAP_MPSMIN(readq(&dev->bar->cap)) + 12;
+	u64 cap = readq(&dev->bar->cap);
+	int shift = NVME_CAP_MPSMIN(cap) + 12;
+	int lightnvm_cmdset = NVME_CAP_LIGHTNVM(cap);
 
 	mem = dma_alloc_coherent(&pdev->dev, 8192, &dma_addr, GFP_KERNEL);
 	if (!mem)
@@ -2458,11 +2460,7 @@ static int nvme_dev_add(struct nvme_dev *dev)
 	dev->tagset.flags = BLK_MQ_F_SHOULD_MERGE;
 	dev->tagset.driver_data = dev;
 
-	/* LightNVM is actually per ns, but as the tagset is defined with a set
-	 * of operations for the whole device. It currently is either all or
-	 * no lightnvm compatible name-spaces for a given device.
-	 */
-	if (dev->oacs & NVME_CTRL_OACS_LIGHTNVM) {
+	if (lightnvm_cmdset) {
 		dev->tagset.flags &= ~BLK_MQ_F_SHOULD_MERGE;
 		dev->tagset.flags |= BLK_MQ_F_LIGHTNVM;
 	}
