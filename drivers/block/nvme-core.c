@@ -609,6 +609,44 @@ static void nvme_submit_flush(struct nvme_queue *nvmeq, struct nvme_ns *ns,
 	writel(nvmeq->sq_tail, nvmeq->q_db);
 }
 
+static int nvme_submit_lnvm_iod(struct nvme_queue *nvmeq, struct nvme_iod *iod,
+							struct nvme_ns *ns)
+{
+	struct request *req = iod->private;
+	struct nvme_command *cmnd;
+	u16 control = 0;
+	u32 dsmgmt = 0;
+
+	if (req->cmd_flags & REQ_FUA)
+		control |= NVME_RW_FUA;
+	if (req->cmd_flags & (REQ_FAILFAST_DEV | REQ_RAHEAD))
+		control |= NVME_RW_LR;
+
+	if (req->cmd_flags & REQ_RAHEAD)
+		dsmgmt |= NVME_RW_DSM_FREQ_PREFETCH;
+
+	cmnd = &nvmeq->sq_cmds[nvmeq->sq_tail];
+	memset(cmnd, 0, sizeof(*cmnd));
+
+	cmnd->lnvm_rw.opcode = (rq_data_dir(req) ?
+				lnvm_cmd_hybrid_write : lnvm_cmd_hybrid_read);
+	cmnd->lnvm_rw.command_id = req->tag;
+	cmnd->lnvm_rw.nsid = cpu_to_le32(ns->ns_id);
+	cmnd->lnvm_rw.prp1 = cpu_to_le64(sg_dma_address(iod->sg));
+	cmnd->lnvm_rw.prp2 = cpu_to_le64(iod->first_dma);
+	cmnd->lnvm_rw.slba = cpu_to_le64(nvme_block_nr(ns, blk_rq_pos(req)));
+	cmnd->lnvm_rw.length = cpu_to_le16((blk_rq_bytes(req) >> ns->lba_shift) - 1);
+	cmnd->lnvm_rw.control = cpu_to_le16(control);
+	cmnd->lnvm_rw.dsmgmt = cpu_to_le32(dsmgmt);
+	cmnd->lnvm_rw.phys_addr = cpu_to_le64(nvme_block_nr(ns, req->phys_sector) + 1);
+
+	if (++nvmeq->sq_tail == nvmeq->q_depth)
+		nvmeq->sq_tail = 0;
+	writel(nvmeq->sq_tail, nvmeq->q_db);
+
+	return 0;
+}
+
 static int nvme_submit_iod(struct nvme_queue *nvmeq, struct nvme_iod *iod,
 							struct nvme_ns *ns)
 {
@@ -628,6 +666,9 @@ static int nvme_submit_iod(struct nvme_queue *nvmeq, struct nvme_iod *iod,
 	cmnd = &nvmeq->sq_cmds[nvmeq->sq_tail];
 	memset(cmnd, 0, sizeof(*cmnd));
 
+	if (req->cmd_flags & REQ_NVM_MAPPED)
+		cmnd->lnvm_rw.phys_addr = cpu_to_le64(nvme_block_nr(ns, req->phys_sector) + 1);
+
 	cmnd->rw.opcode = (rq_data_dir(req) ? nvme_cmd_write : nvme_cmd_read);
 	cmnd->rw.command_id = req->tag;
 	cmnd->rw.nsid = cpu_to_le32(ns->ns_id);
@@ -637,9 +678,6 @@ static int nvme_submit_iod(struct nvme_queue *nvmeq, struct nvme_iod *iod,
 	cmnd->rw.length = cpu_to_le16((blk_rq_bytes(req) >> ns->lba_shift) - 1);
 	cmnd->rw.control = cpu_to_le16(control);
 	cmnd->rw.dsmgmt = cpu_to_le32(dsmgmt);
-
-	if (req->cmd_flags & REQ_NVM_MAPPED)
-		cmnd->lnvm_rw.phys_addr = cpu_to_le64(nvme_block_nr(ns, req->phys_sector) + 1);
 
 	if (++nvmeq->sq_tail == nvmeq->q_depth)
 		nvmeq->sq_tail = 0;
@@ -706,6 +744,8 @@ static int nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 		nvme_submit_discard(nvmeq, ns, req, iod);
 	else if (req->cmd_flags & REQ_FLUSH)
 		nvme_submit_flush(nvmeq, ns, req->tag);
+	else if (req->cmd_flags & REQ_NVM_MAPPED)
+		nvme_submit_lnvm_iod(nvmeq, iod, ns);
 	else
 		nvme_submit_iod(nvmeq, iod, ns);
 
