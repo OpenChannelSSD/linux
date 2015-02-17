@@ -764,6 +764,9 @@ static int blk_mq_prep_rq(struct request_queue *q, struct request *rq)
 	if (!q->prep_rq_fn)
 		return 0;
 
+	if (rq->cmd_flags & REQ_DONTPREP)
+		return 0;
+
 	return q->prep_rq_fn(q, rq);
 }
 

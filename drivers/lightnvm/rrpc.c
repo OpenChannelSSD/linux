@@ -590,13 +590,9 @@ static void rrpc_unprep_rq(struct request_queue *q, struct request *rq)
 
 	rrpc = container_of(bio->bi_lightnvm, struct rrpc, payload);
 
-	if (rq->cmd_flags & (REQ_NVM|REQ_NVM_MAPPED))
+	if (rq->cmd_flags & REQ_NVM_MAPPED) {
 		__rrpc_unprep_rq(rrpc, rq);
-
-	if (!(rq->cmd_flags & REQ_NVM)) {
-		if (rq->cmd_flags & REQ_NVM_NO_INFLIGHT)
-			BUG();
-		pr_info("lightnvm: request outside lightnvm detected.\n");
+		BUG_ON(rq->cmd_flags & REQ_NVM_NO_INFLIGHT);
 	}
 }
 
@@ -685,7 +681,7 @@ static int __rrpc_prep_rq(struct rrpc *rrpc, struct request *rq)
 		ret = rrpc_read_rq(rrpc, rq);
 
 	if (!ret)
-		rq->cmd_flags |= (REQ_NVM|REQ_NVM_MAPPED);
+		rq->cmd_flags |= (REQ_NVM_MAPPED|REQ_DONTPREP);
 
 	return ret;
 }
