@@ -216,6 +216,7 @@ static int nvm_luns_init(struct nvm_dev *dev)
 		/* TODO: gran_{read,write} may differ */
 		dev->nr_pages_per_blk = chnl->gran_erase / chnl->gran_read *
 					(chnl->gran_read / dev->sector_size);
+		lun->nr_pages_per_blk = dev->nr_pages_per_blk;
 	}
 
 	return 0;
@@ -587,7 +588,7 @@ static int nvm_create_disk(struct gendisk *qdisk, char *ttname, char *devname,
 	disk->private_data = target;
 	disk->queue = q;
 
-	set_capacity(disk, 1024*1024*32);
+	set_capacity(disk, tt->capacity(target));
 
 	add_disk(disk);
 

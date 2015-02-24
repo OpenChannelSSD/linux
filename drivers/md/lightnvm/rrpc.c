@@ -929,6 +929,29 @@ static void rrpc_exit(void *private)
 	rrpc_free(rrpc);
 }
 
+static sector_t rrpc_capacity(void *private)
+{
+	struct rrpc *rrpc = private;
+	struct nvm_lun *lun;
+	sector_t reserved;
+	int i, max_pages_per_blk = 0;
+
+	nvm_for_each_lun(rrpc->q_nvm, lun, i) {
+		if (lun->nr_pages_per_blk > max_pages_per_blk)
+			max_pages_per_blk = lun->nr_pages_per_blk;
+	}
+
+	/* lun->cur, lun->gc, and two emergency blocks */
+	reserved = rrpc->nr_luns * max_pages_per_blk * 4;
+
+	if (reserved > rrpc->nr_pages) {
+		pr_err("rrpc: not enough space available to expose storage.\n");
+		return 0;
+	}
+
+	return (rrpc->nr_pages - reserved) * RRPC_OVERPROVISIONING;
+}
+
 static void *rrpc_init(struct request_queue *q, struct gendisk *disk)
 {
 	struct nvm_dev *dev;
@@ -1007,6 +1030,7 @@ static struct nvm_target_type tt_rrpc = {
 	.make_rq	= rrpc_make_rq,
 	.prep_rq	= rrpc_prep_rq,
 	.unprep_rq	= rrpc_unprep_rq,
+	.capacity	= rrpc_capacity,
 	.init		= rrpc_init,
 	.exit		= rrpc_exit,
 };

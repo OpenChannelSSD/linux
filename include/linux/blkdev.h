@@ -1666,6 +1666,8 @@ struct nvm_lun {
 
 	unsigned int nr_blocks;		/* end_block - start_block. */
 	unsigned int nr_free_blocks;	/* Number of unused blocks */
+
+	int nr_pages_per_blk;
 };
 
 struct nvm_block {
@@ -1738,6 +1740,7 @@ struct nvm_per_rq {
 typedef void (nvm_tgt_make_rq)(struct request_queue *, struct bio *);
 typedef int (nvm_tgt_prep_rq)(struct request_queue *, struct request *);
 typedef void (nvm_tgt_unprep_rq)(struct request_queue *, struct request *);
+typedef sector_t (nvm_tgt_capacity)(void *);
 typedef void *(nvm_tgt_init_fn)(struct request_queue *, struct gendisk *);
 typedef void (nvm_tgt_exit_fn)(void *);
 
@@ -1749,6 +1752,7 @@ struct nvm_target_type {
 	nvm_tgt_make_rq *make_rq;
 	nvm_tgt_prep_rq *prep_rq;
 	nvm_tgt_unprep_rq *unprep_rq;
+	nvm_tgt_capacity *capacity;
 
 	/* module-specific init/teardown */
 	nvm_tgt_init_fn *init;
