@@ -325,8 +325,6 @@ EXPORT_SYMBOL_GPL(blk_mq_free_request);
 
 inline void __blk_mq_end_request(struct request *rq, int error)
 {
-	struct request_queue *q = rq->q;
-
 	blk_account_io_done(rq);
 
 	if (rq->end_io) {
@@ -1925,7 +1923,6 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_tag_set *set)
 	struct request_queue *q;
 	unsigned int *map;
 	int i;
-	unsigned int cmd_size = set->cmd_size;;
 
 	ctx = alloc_percpu(struct blk_mq_ctx);
 	if (!ctx)
@@ -1986,10 +1983,8 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_tag_set *set)
 	if (!(set->flags & BLK_MQ_F_SG_MERGE))
 		q->queue_flags |= 1 << QUEUE_FLAG_NO_SG_MERGE;
 
-	if (set->flags & BLK_MQ_F_LIGHTNVM) {
+	if (set->flags & BLK_MQ_F_LIGHTNVM)
 		q->queue_flags |= 1 << QUEUE_FLAG_LIGHTNVM;
-		cmd_size += sizeof(struct nvm_per_rq);
-	}
 
 	q->sg_reserved_size = INT_MAX;
 

@@ -1691,7 +1691,6 @@ struct nvm_block {
 
 struct nvm_dev {
 	struct lightnvm_dev_ops *ops;
-	struct gendisk *disk;
 	struct request_queue *q;
 
 	/* LightNVM stores extra data after the private driver data */

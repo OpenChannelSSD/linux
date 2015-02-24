@@ -655,12 +655,7 @@ static struct attribute_group nvm_attribute_group = {
 	.attrs = nvm_attrs,
 };
 
-static void nvm_remove_sysfs(struct device *dev)
-{
-	sysfs_remove_group(&dev->kobj, &nvm_attribute_group);
-}
-
-static int nvm_add_sysfs(struct device *dev)
+int blk_lightnvm_init_sysfs(struct device *dev)
 {
 	int ret;
 
@@ -673,12 +668,7 @@ static int nvm_add_sysfs(struct device *dev)
 	return 0;
 }
 
-int blk_lightnvm_init_sysfs(struct device *dev)
-{
-	return nvm_add_sysfs(dev);
-}
-
 void blk_lightnvm_remove_sysfs(struct device *dev)
 {
-	nvm_remove_sysfs(dev);
+	sysfs_remove_group(&dev->kobj, &nvm_attribute_group);
 }

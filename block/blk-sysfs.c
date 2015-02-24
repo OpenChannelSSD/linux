@@ -571,11 +571,6 @@ int blk_register_queue(struct gendisk *disk)
 
 	if (blk_queue_lightnvm(q))
 	{
-		/*
-		 * FIXME: How to get from queue to disk (used by internal cmds)?
-		 */
-		q->nvm->disk = disk;
-
 		ret = blk_lightnvm_init_sysfs(dev);
 		if (ret)
 			return ret;
