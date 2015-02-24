@@ -7,7 +7,6 @@
 #include <linux/bio.h>
 #include <linux/blkdev.h>
 #include <linux/blktrace_api.h>
-#include <linux/lightnvm.h>
 #include <linux/blk-mq.h>
 
 #include "blk.h"
@@ -609,7 +608,7 @@ void blk_unregister_queue(struct gendisk *disk)
 	if (WARN_ON(!q))
 		return;
 
-	if (q->nvm) {
+	if (blk_queue_lightnvm(q)) {
 		blk_lightnvm_unregister(q);
 		blk_lightnvm_remove_sysfs(disk_to_dev(disk));
 	}

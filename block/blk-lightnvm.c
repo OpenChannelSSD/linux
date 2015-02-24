@@ -502,7 +502,7 @@ EXPORT_SYMBOL(blk_lightnvm_register);
 
 void blk_lightnvm_unregister(struct request_queue *q)
 {
-	if (!q->nvm)
+	if (!blk_queue_lightnvm(q))
 		return;
 
 	nvm_exit(q->nvm);
