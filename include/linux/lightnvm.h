@@ -1,97 +1,61 @@
 #ifndef LIGHTNVM_H
 #define LIGHTNVM_H
 
+#include <linux/blkdev.h>
 #include <linux/types.h>
-#include <linux/blk-mq.h>
-#include <linux/genhd.h>
 
-enum {
-	/* HW Responsibilities */
-	NVM_RSP_L2P	= 0x00,
-	NVM_RSP_GC	= 0x01,
-	NVM_RSP_ECC	= 0x02,
+#define nvm_for_each_lun(dev, lun, i) \
+		for ((i) = 0, lun = &(dev)->luns[0]; \
+			(i) < (dev)->nr_luns; (i)++, lun = &(dev)->luns[(i)])
 
-	/* Physical NVM Type */
-	NVM_NVMT_BLK	= 0,
-	NVM_NVMT_BYTE	= 1,
+#define lun_for_each_block(p, b, i) \
+		for ((i) = 0, b = &(p)->blocks[0]; \
+			(i) < (p)->nr_blocks; (i)++, b = &(p)->blocks[(i)])
 
-	/* Internal IO Scheduling algorithm */
-	NVM_IOSCHED_CHANNEL	= 0,
-	NVM_IOSCHED_CHIP	= 1,
+#define block_for_each_page(b, p) \
+		for ((p)->addr = block_to_addr((b)), (p)->block = (b); \
+			(p)->addr < block_to_addr((b)) \
+				+ (b)->lun->dev->nr_pages_per_blk; \
+			(p)->addr++)
 
-	/* Status codes */
-	NVM_SUCCESS		= 0,
-	NVM_RSP_NOT_CHANGEABLE	= 1,
-};
+/* We currently assume that we the lightnvm device is accepting data in 512
+ * bytes chunks. This should be set to the smallest command size available for a
+ * given device.
+ */
+#define NVM_SECTOR 512
+#define EXPOSED_PAGE_SIZE 4096
 
-struct nvm_id_chnl {
-	u64	laddr_begin;
-	u64	laddr_end;
-	u32	oob_size;
-	u32	queue_size;
-	u32	gran_read;
-	u32	gran_write;
-	u32	gran_erase;
-	u32	t_r;
-	u32	t_sqr;
-	u32	t_w;
-	u32	t_sqw;
-	u32	t_e;
-	u16	chnl_parallelism;
-	u8	io_sched;
-	u8	res[133];
-};
+#define NR_PHY_IN_LOG (EXPOSED_PAGE_SIZE / NVM_SECTOR)
 
-struct nvm_id {
-	u8	ver_id;
-	u8	nvm_type;
-	u16	nchannels;
-	struct nvm_id_chnl *chnls;
-};
+#define NVM_MSG_PREFIX "nvm"
+#define ADDR_EMPTY (~0ULL)
+#define LTOP_POISON 0xD3ADB33F
 
-struct nvm_get_features {
-	u64	rsp;
-	u64	ext;
-};
+/* core.c */
 
-typedef int (nvm_l2p_update_fn)(u64, u64, u64 *, void *);
-typedef int (nvm_id_fn)(struct request_queue *, struct nvm_id *);
-typedef int (nvm_get_features_fn)(struct request_queue *,
-				  struct nvm_get_features *);
-typedef int (nvm_set_rsp_fn)(struct request_queue *, u64);
-typedef int (nvm_get_l2p_tbl_fn)(struct request_queue *, u64, u64,
-				 nvm_l2p_update_fn *, void *);
-typedef int (nvm_erase_blk_fn)(struct request_queue *, sector_t);
+static inline int block_is_full(struct nvm_block *block)
+{
+	struct nvm_dev *dev = block->lun->dev;
 
-struct lightnvm_dev_ops {
-	nvm_id_fn		*identify;
-	nvm_get_features_fn	*get_features;
-	nvm_set_rsp_fn		*set_responsibility;
-	nvm_get_l2p_tbl_fn	*get_l2p_tbl;
+	return block->next_page == dev->nr_pages_per_blk;
+}
 
-	nvm_erase_blk_fn	*erase_block;
-};
+static inline sector_t block_to_addr(struct nvm_block *block)
+{
+	struct nvm_dev *dev = block->lun->dev;
 
-struct nvm_dev {
-	struct lightnvm_dev_ops *ops;
-	struct gendisk *disk;
-	struct request_queue *q;
+	return block->id * dev->nr_pages_per_blk;
+}
 
-	/* LightNVM stores extra data after the private driver data */
-	unsigned int drv_cmd_size;
+static inline struct nvm_lun *paddr_to_lun(struct nvm_dev *dev,
+							sector_t p_addr)
+{
+	return &dev->luns[p_addr / (dev->nr_pages / dev->nr_luns)];
+}
 
-	void *stor;
-};
-
-/* LightNVM configuration */
-unsigned int nvm_cmd_size(void);
-
-int nvm_init(struct nvm_dev *);
-void nvm_exit(struct nvm_dev *);
-int nvm_map_rq(struct nvm_dev *, struct request *);
-void nvm_complete_request(struct nvm_dev *, struct request *, int err);
-
-int nvm_add_sysfs(struct device *);
-void nvm_remove_sysfs(struct device *);
+static inline int physical_to_slot(struct nvm_dev *dev, sector_t phys)
+{
+	return phys % dev->nr_pages_per_blk;
+}
 
 #endif

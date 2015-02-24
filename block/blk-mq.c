@@ -21,7 +21,6 @@
 #include <linux/sched/sysctl.h>
 #include <linux/delay.h>
 #include <linux/crash_dump.h>
-#include <linux/lightnvm.h>
 
 #include <trace/events/block.h>
 
@@ -221,7 +220,7 @@ static void blk_mq_rq_ctx_init(struct request_queue *q, struct blk_mq_ctx *ctx,
 	rq->end_io_data = NULL;
 	rq->next_rq = NULL;
 
-#if CONFIG_LIGHTNVM
+#if CONFIG_BLK_DEV_LIGHTNVM
 	rq->phys_sector = 0;
 #endif
 	ctx->rq_dispatched[rw_is_sync(rw_flags)]++;
@@ -328,9 +327,6 @@ inline void __blk_mq_end_request(struct request *rq, int error)
 {
 	struct request_queue *q = rq->q;
 
-	if (blk_queue_lightnvm(q))
-		nvm_complete_request(q->nvm, rq, error);
-
 	blk_account_io_done(rq);
 
 	if (rq->end_io) {
@@ -345,6 +341,11 @@ EXPORT_SYMBOL(__blk_mq_end_request);
 
 void blk_mq_end_request(struct request *rq, int error)
 {
+	struct request_queue *q = rq->q;
+
+	if (q->unprep_rq_fn)
+		q->unprep_rq_fn(q, rq);
+
 	if (blk_update_request(rq, error, blk_rq_bytes(rq)))
 		BUG();
 	__blk_mq_end_request(rq, error);
@@ -760,14 +761,12 @@ static void flush_busy_ctxs(struct blk_mq_hw_ctx *hctx, struct list_head *list)
 	}
 }
 
-static int blk_mq_lightnvm_map(struct request *rq)
+static int blk_mq_prep_rq(struct request_queue *q, struct request *rq)
 {
-	struct request_queue *q = rq->q;
-
-	if (!blk_queue_lightnvm(q))
+	if (!q->prep_rq_fn)
 		return 0;
 
-	return blk_lightnvm_map_rq(q->nvm, rq);
+	return q->prep_rq_fn(q, rq);
 }
 
 /*
@@ -829,7 +828,7 @@ static void __blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 		bd.list = dptr;
 		bd.last = list_empty(&rq_list);
 
-		ret = blk_mq_lightnvm_map(rq);
+		ret = blk_mq_prep_rq(q, rq);
 		if (likely(!ret))
 			ret = q->mq_ops->queue_rq(hctx, &bd);
 		switch (ret) {
@@ -1293,7 +1292,7 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 		 * error (busy), just add it to our list as we previously
 		 * would have done
 		 */
-		ret = blk_mq_lightnvm_map(rq);
+		ret = blk_mq_prep_rq(q, rq);
 		if (likely(!ret))
 			ret = q->mq_ops->queue_rq(data.hctx, &bd);
 		if (ret == BLK_MQ_RQ_QUEUE_OK)
@@ -1466,7 +1465,7 @@ static struct blk_mq_tags *blk_mq_init_rq_map(struct blk_mq_tag_set *set,
 	}
 
 	if (set->flags & BLK_MQ_F_LIGHTNVM)
-		cmd_size += nvm_cmd_size();
+		cmd_size += sizeof(struct nvm_per_rq);
 
 	/*
 	 * rq_size is the size of the request plus driver payload, rounded
@@ -1989,7 +1988,7 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_tag_set *set)
 
 	if (set->flags & BLK_MQ_F_LIGHTNVM) {
 		q->queue_flags |= 1 << QUEUE_FLAG_LIGHTNVM;
-		cmd_size += nvm_cmd_size();
+		cmd_size += sizeof(struct nvm_per_rq);
 	}
 
 	q->sg_reserved_size = INT_MAX;

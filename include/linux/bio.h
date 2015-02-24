@@ -354,6 +354,15 @@ static inline void bip_set_seed(struct bio_integrity_payload *bip,
 
 #endif /* CONFIG_BLK_DEV_INTEGRITY */
 
+#if defined(CONFIG_BLK_DEV_LIGHTNVM)
+
+/* bio lightnvm payload */
+struct bio_lightnvm_payload {
+	void *private;
+};
+
+#endif /* CONFIG_BLK_DEV_LIGHTNVM */
+
 extern void bio_trim(struct bio *bio, int offset, int size);
 extern struct bio *bio_split(struct bio *bio, int sectors,
 			     gfp_t gfp, struct bio_set *bs);

@@ -82,6 +82,10 @@ struct bio {
 #if defined(CONFIG_BLK_DEV_INTEGRITY)
 		struct bio_integrity_payload *bi_integrity; /* data integrity */
 #endif
+#if defined(CONFIG_BLK_DEV_LIGHTNVM)
+		struct bio_lightnvm_payload *bi_lightnvm; /* open-channel ssd
+								     support */
+#endif
 	};
 
 	unsigned short		bi_vcnt;	/* how many bio_vec's */
