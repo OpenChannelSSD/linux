@@ -501,14 +501,13 @@ err_init:
 }
 EXPORT_SYMBOL(blk_lightnvm_register);
 
-void blk_lightnvm_unregister(struct request_queue *q)
+void blk_nvm_unregister(struct request_queue *q)
 {
 	if (!blk_queue_lightnvm(q))
 		return;
 
 	nvm_exit(q->nvm);
 }
-EXPORT_SYMBOL(blk_lightnvm_unregister);
 
 static int nvm_ioctl(struct block_device *bdev, fmode_t mode, unsigned int cmd,
 							unsigned long arg)
@@ -656,7 +655,7 @@ static struct attribute_group nvm_attribute_group = {
 	.attrs = nvm_attrs,
 };
 
-int blk_lightnvm_init_sysfs(struct device *dev)
+int blk_nvm_init_sysfs(struct device *dev)
 {
 	int ret;
 
@@ -669,7 +668,7 @@ int blk_lightnvm_init_sysfs(struct device *dev)
 	return 0;
 }
 
-void blk_lightnvm_remove_sysfs(struct device *dev)
+void blk_nvm_remove_sysfs(struct device *dev)
 {
 	sysfs_remove_group(&dev->kobj, &nvm_attribute_group);
 }

@@ -284,13 +284,13 @@ static inline void blk_throtl_exit(struct request_queue *q) { }
 #ifdef CONFIG_BLK_DEV_LIGHTNVM
 struct lightnvm_dev_ops;
 
-extern void blk_lightnvm_unregister(struct request_queue *);
-extern int blk_lightnvm_init_sysfs(struct device *);
-extern void blk_lightnvm_remove_sysfs(struct device *);
+extern void blk_nvm_unregister(struct request_queue *);
+extern int blk_nvm_init_sysfs(struct device *);
+extern void blk_nvm_remove_sysfs(struct device *);
 #else
-static void blk_lightnvm_unregister(struct request_queue *q) { }
-static int blk_lightnvm_init_sysfs(struct device *) { return 0; }
-static void blk_lightnvm_remove_sysfs(struct device *) { }
+static void blk_nvm_unregister(struct request_queue *q) { }
+static int blk_nvm_init_sysfs(struct device *) { return 0; }
+static void blk_nvm_remove_sysfs(struct device *) { }
 #endif /* CONFIG_BLK_DEV_LIGHTNVM */
 
 #endif /* BLK_INTERNAL_H */
