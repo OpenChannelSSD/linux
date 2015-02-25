@@ -130,20 +130,15 @@ static struct rrpc_lun *get_next_lun(struct rrpc *rrpc)
 	return &rrpc->luns[next % rrpc->nr_luns];
 }
 
-static void rrpc_queue_lun_gc(struct rrpc *rrpc, struct nvm_lun *lun)
-{
-	struct rrpc_lun *rlun = &rrpc->luns[lun->id];
-
-	queue_work(rrpc->krqd_wq, &rlun->ws_gc);
-}
-
 static void rrpc_gc_kick(struct rrpc *rrpc)
 {
-	struct nvm_lun *lun;
+	struct rrpc_lun *rlun;
 	unsigned int i;
 
-	nvm_for_each_lun(rrpc->q_nvm, lun, i)
-		rrpc_queue_lun_gc(rrpc, lun);
+	for (i = 0; i < rrpc->nr_luns; i++) {
+		rlun = &rrpc->luns[i];
+		queue_work(rrpc->krqd_wq, &rlun->ws_gc);
+	}
 }
 
 /**
@@ -857,7 +852,7 @@ static void rrpc_luns_free(struct rrpc *rrpc)
 	kfree(rrpc->luns);
 }
 
-static int rrpc_luns_init(struct rrpc *rrpc)
+static int rrpc_luns_init(struct rrpc *rrpc, int lun_begin, int lun_end)
 {
 	struct nvm_dev *dev = rrpc->q_nvm;
 	struct nvm_block *block;
@@ -872,12 +867,16 @@ static int rrpc_luns_init(struct rrpc *rrpc)
 		return -ENOMEM;
 
 	/* 1:1 mapping */
-	rrpc_for_each_lun(rrpc, rlun, i) {
-		struct nvm_lun *lun = &dev->luns[i]; /* TODO: Use lun list instead */
+	for (i = 0; i < rrpc->nr_luns; i++) {
+		struct nvm_lun *lun = &dev->luns[i + lun_begin];
 
+		rlun = &rrpc->luns[i];
 		rlun->rrpc = rrpc;
 		rlun->parent = lun;
 		rlun->nr_blocks = lun->nr_blocks;
+
+		rrpc->total_blocks += lun->nr_blocks;
+		rrpc->nr_pages += lun->nr_blocks * lun->nr_pages_per_blk;
 
 		block = blk_nvm_get_blk(lun, 0);
 		rrpc_set_lun_cur(rlun, block);
@@ -952,7 +951,8 @@ static sector_t rrpc_capacity(void *private)
 	return ((rrpc->nr_pages - reserved) / 10) * 9 * NR_PHY_IN_LOG;
 }
 
-static void *rrpc_init(struct request_queue *q, struct gendisk *disk)
+static void *rrpc_init(struct request_queue *q, struct gendisk *disk,
+						int lun_begin, int lun_end)
 {
 	struct nvm_dev *dev;
 	struct block_device *bdev;
@@ -972,7 +972,7 @@ static void *rrpc_init(struct request_queue *q, struct gendisk *disk)
 
 	dev = blk_nvm_get_dev(q);
 
-	rrpc = kmalloc(sizeof(struct rrpc), GFP_KERNEL);
+	rrpc = kzalloc(sizeof(struct rrpc), GFP_KERNEL);
 	if (!rrpc) {
 		ret = -ENOMEM;
 		goto err;
@@ -981,14 +981,12 @@ static void *rrpc_init(struct request_queue *q, struct gendisk *disk)
 	rrpc->q_dev = q;
 	rrpc->q_nvm = q->nvm;
 	rrpc->q_bdev = bdev;
-	rrpc->nr_luns = dev->nr_luns; /* TODO: Fix to pass luns instead */
-	rrpc->nr_pages = dev->nr_pages;
-	rrpc->total_blocks = dev->total_blocks;
+	rrpc->nr_luns = lun_end - lun_begin + 1;
 
 	/* simple round-robin strategy */
 	atomic_set(&rrpc->next_lun, -1);
 
-	ret = rrpc_luns_init(rrpc);
+	ret = rrpc_luns_init(rrpc, lun_begin, lun_end);
 	if (ret) {
 		pr_err("lightnvm: could not initialize luns\n");
 		goto err;

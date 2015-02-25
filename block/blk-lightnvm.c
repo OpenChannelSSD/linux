@@ -561,7 +561,7 @@ static int nvm_create_disk(struct gendisk *qdisk, char *ttname, char *devname,
 	if (!q)
 		return -ENOMEM;
 
-	target = tt->init(qnvm, qdisk);
+	target = tt->init(qnvm, qdisk, lun_begin, lun_end);
 	if (IS_ERR(target)) {
 		blk_cleanup_queue(q);
 		return -ENOMEM;
