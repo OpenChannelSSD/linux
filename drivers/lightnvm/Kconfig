@@ -3,10 +3,9 @@
 #
 
 menuconfig LIGHTNVM
-	bool "LightNVM support"
-	depends on BLK_DEV
-	default y
-	---help---
+	bool "LightNVM Open-Channel SSD target support"
+	depends on BLK_DEV_LIGHTNVM
+	help
 	  Say Y here to get to enable Open-channel SSDs compatible with LightNVM
 	  to be recognized.
 
@@ -18,3 +17,16 @@ menuconfig LIGHTNVM
 	  If you say N, all options in this submenu will be skipped and disabled;
 	  only do this if you know what you are doing.
 
+if LIGHTNVM
+
+config LIGHTNVM_RRPC
+	tristate "Round-robin Hybrid Open-Channel SSD"
+	depends on BLK_DEV_LIGHTNVM
+	---help---
+	Allows an open-channel SSD to be exposed as a block device to the
+	host. The target is implemented using a linear mapping table and
+	cost-based garbage collection. It is optimized for 4K IO sizes.
+
+	See Documentation/lightnvm.txt for details.
+
+endif # LIGHTNVM

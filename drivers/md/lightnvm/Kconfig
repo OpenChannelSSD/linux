@@ -1,9 +1,0 @@
-config LIGHTNVM_RRPC
-	tristate "Round-robin Hybrid Open-Channel SSD"
-	depends on BLK_DEV_LIGHTNVM
-	---help---
-	Allows an open-channel SSD to be exposed as a block device to the
-	host. It uses a linear mapping table and optimized for 4K IO
-	accesses.
-
-	See Documentation/lightnvm.txt for details.
