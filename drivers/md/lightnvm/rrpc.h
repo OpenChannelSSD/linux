@@ -23,8 +23,6 @@
 #define GC_LIMIT_INVERSE 10
 #define GC_TIME_SECS 100
 
-#define RRPC_OVERPROVISIONING (9 / 10)
-
 struct nvm_inflight {
 	spinlock_t lock;
 	struct list_head reqs;

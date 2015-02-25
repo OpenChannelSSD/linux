@@ -941,7 +941,7 @@ static sector_t rrpc_capacity(void *private)
 			max_pages_per_blk = lun->nr_pages_per_blk;
 	}
 
-	/* lun->cur, lun->gc, and two emergency blocks */
+	/* cur, gc, and two emergency blocks for each lun */
 	reserved = rrpc->nr_luns * max_pages_per_blk * 4;
 
 	if (reserved > rrpc->nr_pages) {
@@ -949,7 +949,7 @@ static sector_t rrpc_capacity(void *private)
 		return 0;
 	}
 
-	return (rrpc->nr_pages - reserved) * RRPC_OVERPROVISIONING;
+	return ((rrpc->nr_pages - reserved) / 10) * 9 * NR_PHY_IN_LOG;
 }
 
 static void *rrpc_init(struct request_queue *q, struct gendisk *disk)
@@ -1012,7 +1012,7 @@ static void *rrpc_init(struct request_queue *q, struct gendisk *disk)
 		goto err;
 	}
 
-	pr_info("lightnvm: available mgmt luns: %u\n", rrpc->nr_luns);
+	pr_info("lightnvm: rrpc initialized with %u luns and %llu pages.\n", rrpc->nr_luns, rrpc->nr_pages);
 
 	mod_timer(&rrpc->gc_timer, jiffies + msecs_to_jiffies(10));
 
