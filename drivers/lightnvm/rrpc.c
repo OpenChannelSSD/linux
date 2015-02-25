@@ -1010,7 +1010,8 @@ static void *rrpc_init(struct request_queue *q, struct gendisk *disk,
 		goto err;
 	}
 
-	pr_info("lightnvm: rrpc initialized with %u luns and %llu pages.\n", rrpc->nr_luns, rrpc->nr_pages);
+	pr_info("lightnvm: rrpc initialized with %u luns and %llu pages.\n",
+			rrpc->nr_luns, (unsigned long long)rrpc->nr_pages);
 
 	mod_timer(&rrpc->gc_timer, jiffies + msecs_to_jiffies(10));
 
