@@ -28,6 +28,8 @@ struct nvm_inflight {
 	struct list_head reqs;
 };
 
+struct rrpc_lun;
+
 struct rrpc_block {
 	struct nvm_block *parent;
 	struct list_head prio;
@@ -79,6 +81,7 @@ struct rrpc {
 
 	mempool_t *addr_pool;
 	mempool_t *page_pool;
+	mempool_t *gcb_pool;
 
 	struct timer_list gc_timer;
 	struct workqueue_struct *krqd_wq;

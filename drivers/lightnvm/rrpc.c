@@ -22,6 +22,7 @@
 #include "rrpc.h"
 
 static struct kmem_cache *_addr_cache;
+static struct kmem_cache *_gcb_cache;
 static DECLARE_RWSEM(_lock);
 
 #define rrpc_for_each_lun(rrpc, rlun, i) \
@@ -283,7 +284,7 @@ static void rrpc_block_gc(struct work_struct *work)
 	blk_nvm_erase_blk(dev, block);
 	blk_nvm_put_blk(block);
 done:
-	kfree(gcb);
+	mempool_free(gcb, rrpc->gcb_pool);
 }
 
 /* the block with highest number of invalid pages, will be in the beginning
@@ -347,7 +348,7 @@ static void rrpc_lun_gc(struct work_struct *work)
 		pr_debug("lightnvm: selected block '%d' as GC victim\n",
 								block->id);
 
-		gcb = kmalloc(sizeof(struct rrpc_block_gc), GFP_ATOMIC);
+		gcb = mempool_alloc(rrpc->gcb_pool, GFP_ATOMIC);
 		if (!gcb)
 			break;
 
@@ -364,17 +365,22 @@ static void rrpc_lun_gc(struct work_struct *work)
 	/* TODO: Hint that request queue can be started again */
 }
 
-static void rrpc_gc_queue(struct rrpc* rrpc, struct nvm_block *block)
+static void rrpc_gc_queue(struct work_struct *work)
 {
+	struct rrpc_block_gc *gcb = container_of(work, struct rrpc_block_gc,
+									ws_gc);
+	struct rrpc *rrpc = gcb->rrpc;
+	struct nvm_block *block = gcb->block;
 	struct nvm_lun *lun = block->lun;
 	struct rrpc_lun *rlun = &rrpc->luns[lun->id - rrpc->lun_offset];
 	struct rrpc_block *rblock =
 			&rlun->blocks[block->id % lun->nr_blocks];
 
-	spin_lock(&lun->lock);
+	spin_lock(&rlun->lock);
 	list_add_tail(&rblock->prio, &rlun->prio_list);
-	spin_unlock(&lun->lock);
+	spin_unlock(&rlun->lock);
 
+	mempool_free(gcb, rrpc->gcb_pool);
 	pr_debug("nvm: block '%d' is full, allow GC (sched)\n", block->id);
 }
 
@@ -567,10 +573,23 @@ static void __rrpc_unprep_rq(struct rrpc *rrpc, struct request *rq)
 
 	if (rq_data_dir(rq) == WRITE) {
 		fill = atomic_inc_return(&block->data_cmnt_size);
-		if (fill == rrpc->q_nvm->nr_pages_per_blk)
-			rrpc_gc_queue(rrpc, block);
+		if (fill == rrpc->q_nvm->nr_pages_per_blk) {
+			struct rrpc_block_gc *gcb =
+				mempool_alloc(rrpc->gcb_pool, GFP_ATOMIC);
+			if (!gcb) {
+				pr_err("rrpc: expect failures...");
+				goto gcb_fail;
+			}
+
+			gcb->rrpc = rrpc;
+			gcb->block = block;
+			INIT_WORK(&gcb->ws_gc, rrpc_gc_queue);
+
+			queue_work(rrpc->kgc_wq, &gcb->ws_gc);
+		}
 	}
 
+gcb_fail:
 	/* all submitted requests allocate their own addr,
 	 * except GC reads */
 	if (rq->cmd_flags & REQ_NVM_NO_INFLIGHT)
@@ -722,7 +741,6 @@ static void rrpc_make_rq(struct request_queue *q, struct bio *bio)
 
 static void rrpc_gc_free(struct rrpc *rrpc)
 {
-	struct nvm_dev *dev = rrpc->q_nvm;
 	struct rrpc_lun *rlun;
 	int i;
 
@@ -810,6 +828,16 @@ static int rrpc_core_init(struct rrpc *rrpc)
 			return -ENOMEM;
 		}
 	}
+
+	if (!_gcb_cache) {
+		_gcb_cache = kmem_cache_create("nvm_gcb_cache",
+				sizeof(struct rrpc_block_gc), 0, 0, NULL);
+		if (!_gcb_cache) {
+			kmem_cache_destroy(_addr_cache);
+			up_write(&_lock);
+			return -ENOMEM;
+		}
+	}
 	up_write(&_lock);
 
 	rrpc->page_pool = mempool_create_page_pool(PAGE_POOL_SIZE, 0);
@@ -818,6 +846,11 @@ static int rrpc_core_init(struct rrpc *rrpc)
 
 	rrpc->addr_pool = mempool_create_slab_pool(ADDR_POOL_SIZE, _addr_cache);
 	if (!rrpc->addr_pool)
+		return -ENOMEM;
+
+	rrpc->gcb_pool = mempool_create_slab_pool(rrpc->q_nvm->nr_luns,
+								_gcb_cache);
+	if (!rrpc->gcb_pool)
 		return -ENOMEM;
 
 	for (i = 0; i < NVM_INFLIGHT_PARTITIONS; i++) {
@@ -835,6 +868,8 @@ static void rrpc_core_free(struct rrpc *rrpc)
 	down_write(&_lock);
 	if (_addr_cache)
 		kmem_cache_destroy(_addr_cache);
+	if (_gcb_cache)
+		kmem_cache_destroy(_gcb_cache);
 	up_write(&_lock);
 
 	if (rrpc->addr_pool)
