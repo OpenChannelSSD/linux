@@ -53,6 +53,9 @@ struct rrpc {
 	struct block_device *q_bdev;
 
 	int nr_luns;
+	int lun_offset;
+	sector_t poffset; /* physical page offset */
+
 	struct rrpc_lun *luns;
 
 	/* calculated values */

@@ -50,7 +50,7 @@ static inline void __nvm_page_invalidate(struct rrpc *rrpc, struct nvm_addr *a)
 		return;
 
 	invalidate_block_page(rrpc->q_nvm, a);
-	rrpc->rev_trans_map[a->addr].addr = ADDR_EMPTY;
+	rrpc->rev_trans_map[a->addr - rrpc->poffset].addr = ADDR_EMPTY;
 }
 
 static void rrpc_invalidate_range(struct rrpc *rrpc, sector_t slba, unsigned len)
@@ -212,7 +212,7 @@ static int rrpc_move_valid_pages(struct rrpc *rrpc, struct nvm_block *block)
 
 		spin_lock(&rrpc->rev_lock);
 		/* Get logical address from physical to logical table */
-		rev = &rrpc->rev_trans_map[phys_addr];
+		rev = &rrpc->rev_trans_map[phys_addr - rrpc->poffset];
 		/* already updated by previous regular write */
 		if (rev->addr == LTOP_POISON) {
 			spin_unlock(&rrpc->rev_lock);
@@ -367,7 +367,7 @@ static void rrpc_lun_gc(struct work_struct *work)
 static void rrpc_gc_queue(struct rrpc* rrpc, struct nvm_block *block)
 {
 	struct nvm_lun *lun = block->lun;
-	struct rrpc_lun *rlun = &rrpc->luns[lun->id];
+	struct rrpc_lun *rlun = &rrpc->luns[lun->id - rrpc->lun_offset];
 	struct rrpc_block *rblock =
 			&rlun->blocks[block->id % lun->nr_blocks];
 
@@ -432,7 +432,7 @@ static inline void __rrpc_page_invalidate(struct rrpc *rrpc,
 		return;
 
 	invalidate_block_page(rrpc->q_nvm, gp);
-	rrpc->rev_trans_map[gp->addr].addr = ADDR_EMPTY;
+	rrpc->rev_trans_map[gp->addr - rrpc->poffset].addr = ADDR_EMPTY;
 }
 
 void nvm_update_map(struct rrpc *rrpc, sector_t l_addr, struct nvm_addr *p,
@@ -442,7 +442,6 @@ void nvm_update_map(struct rrpc *rrpc, sector_t l_addr, struct nvm_addr *p,
 	struct nvm_rev_addr *rev;
 
 	BUG_ON(l_addr >= rrpc->nr_pages);
-	BUG_ON(p->addr >= rrpc->nr_pages);
 
 	gp = &rrpc->trans_map[l_addr];
 	spin_lock(&rrpc->rev_lock);
@@ -452,7 +451,7 @@ void nvm_update_map(struct rrpc *rrpc, sector_t l_addr, struct nvm_addr *p,
 	gp->addr = p->addr;
 	gp->block = p->block;
 
-	rev = &rrpc->rev_trans_map[p->addr];
+	rev = &rrpc->rev_trans_map[p->addr - rrpc->poffset];
 	rev->addr = l_addr;
 	spin_unlock(&rrpc->rev_lock);
 }
@@ -539,6 +538,7 @@ static int rrpc_map_update(void *targetdata, u64 slba, u64 pba, u64 blk_page)
 	struct nvm_rev_addr *raddr = rrpc->rev_trans_map;
 
 	addr[blk_page].addr = pba;
+	/* FIXME: missing rrpc->poffset */
 	raddr[pba].addr = slba + blk_page;
 
 	return 0;
@@ -549,7 +549,7 @@ static struct nvm_addr *rrpc_map_get_addr(void *targetdata, sector_t paddr)
 	struct rrpc *rrpc = targetdata;
 	sector_t pladdr;
 
-	pladdr = rrpc->rev_trans_map[paddr].addr;
+	pladdr = rrpc->rev_trans_map[paddr - rrpc->poffset].addr;
 	if (pladdr == ADDR_EMPTY)
 		return NULL;
 
@@ -723,7 +723,7 @@ static void rrpc_make_rq(struct request_queue *q, struct bio *bio)
 static void rrpc_gc_free(struct rrpc *rrpc)
 {
 	struct nvm_dev *dev = rrpc->q_nvm;
-	struct nvm_lun *lun;
+	struct rrpc_lun *rlun;
 	int i;
 
 	del_timer(&rrpc->gc_timer);
@@ -737,8 +737,8 @@ static void rrpc_gc_free(struct rrpc *rrpc)
 	if (!rrpc->luns)
 		return;
 
-	nvm_for_each_lun(dev, lun, i) {
-		struct rrpc_lun *rlun = &rrpc->luns[i];
+	for (i = 0; i < rrpc->nr_luns; i++) {
+		rlun = &rrpc->luns[i];
 
 		if (!rlun->blocks)
 			break;
@@ -987,6 +987,9 @@ static void *rrpc_init(struct request_queue *q, struct gendisk *disk,
 		pr_err("lightnvm: could not initialize luns\n");
 		goto err;
 	}
+
+	rrpc->poffset = rrpc->luns[0].parent->nr_blocks * rrpc->luns[0].parent->nr_pages_per_blk * lun_begin;
+	rrpc->lun_offset = lun_begin;
 
 	ret = rrpc_core_init(rrpc);
 	if (ret) {
