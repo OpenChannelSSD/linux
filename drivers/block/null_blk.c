@@ -7,7 +7,7 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/blk-mq.h>
-#include <linux/lightnvm.h>
+#include <linux/nvm.h>
 #include <linux/hrtimer.h>
 
 struct nullb_cmd {
@@ -148,13 +148,13 @@ static bool use_per_node_hctx = false;
 module_param(use_per_node_hctx, bool, S_IRUGO);
 MODULE_PARM_DESC(use_per_node_hctx, "Use per-node allocation for hardware context queues. Default: false");
 
-static bool lightnvm_enable = false;
-module_param(lightnvm_enable, bool, S_IRUGO);
-MODULE_PARM_DESC(lightnvm_enable, "Enable LightNVM. Default: false");
+static bool nvm_enable = false;
+module_param(nvm_enable, bool, S_IRUGO);
+MODULE_PARM_DESC(nvm_enable, "Enable Open-channel SSD. Default: false");
 
-static int lightnvm_num_channels = 1;
-module_param(lightnvm_num_channels, int, S_IRUGO);
-MODULE_PARM_DESC(lightnvm_num_channels, "Number of channels to be exposed to LightNVM. Default: 1");
+static int nvm_num_channels = 1;
+module_param(nvm_num_channels, int, S_IRUGO);
+MODULE_PARM_DESC(nvm_num_channels, "Number of channels to be exposed from the Open-Channel SSD. Default: 1");
 
 static void put_tag(struct nullb_queue *nq, unsigned int tag)
 {
@@ -364,13 +364,13 @@ static int null_nvm_id(struct request_queue *q, struct nvm_id *id)
 {
 	sector_t size = gb * 1024 * 1024 * 1024ULL;
 	unsigned long per_chnl_size =
-				size / bs / lightnvm_num_channels;
+				size / bs / nvm_num_channels;
 	struct nvm_id_chnl *chnl;
 	int i;
 
 	id->ver_id = 0x1;
 	id->nvm_type = NVM_NVMT_BLK;
-	id->nchannels = lightnvm_num_channels;
+	id->nchannels = nvm_num_channels;
 
 	id->chnls = kmalloc(sizeof(struct nvm_id_chnl) * id->nchannels,
 								GFP_KERNEL);
@@ -440,7 +440,7 @@ static int null_init_hctx(struct blk_mq_hw_ctx *hctx, void *data,
 	return 0;
 }
 
-static struct lightnvm_dev_ops null_nvm_dev_ops = {
+static struct nvm_dev_ops null_nvm_dev_ops = {
 	.identify		= null_nvm_id,
 	.get_features		= null_nvm_get_features,
 };
@@ -583,12 +583,12 @@ static int null_add_dev(void)
 		nullb->tag_set.flags = BLK_MQ_F_SHOULD_MERGE;
 		nullb->tag_set.driver_data = nullb;
 
-		if (lightnvm_enable) {
+		if (nvm_enable) {
 			nullb->tag_set.flags &= ~BLK_MQ_F_SHOULD_MERGE;
-			nullb->tag_set.flags |= BLK_MQ_F_LIGHTNVM;
+			nullb->tag_set.flags |= BLK_MQ_F_NVM;
 
 			if (bs != 4096) {
-				pr_warn("null_blk: only 4K block is supported for LightNVM. bs is set to 4K.\n");
+				pr_warn("null_blk: only 4K block is supported for Open-Channel SSDs. bs is set to 4K.\n");
 				bs = 4096;
 			}
 
@@ -655,8 +655,8 @@ static int null_add_dev(void)
 	disk->private_data	= nullb;
 	disk->queue		= nullb->q;
 
-	if (lightnvm_enable && queue_mode == NULL_Q_MQ) {
-		if (blk_lightnvm_register(nullb->q, &null_nvm_dev_ops))
+	if (nvm_enable && queue_mode == NULL_Q_MQ) {
+		if (blk_nvm_register(nullb->q, &null_nvm_dev_ops))
 			goto out_cleanup_nvm;
 
 		nullb->q->nvm->drv_cmd_size = sizeof(struct nullb_cmd);

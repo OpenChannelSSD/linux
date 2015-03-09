@@ -82,8 +82,8 @@ struct bio {
 #if defined(CONFIG_BLK_DEV_INTEGRITY)
 		struct bio_integrity_payload *bi_integrity; /* data integrity */
 #endif
-#if defined(CONFIG_BLK_DEV_LIGHTNVM)
-		struct bio_lightnvm_payload *bi_lightnvm; /* open-channel ssd
+#if defined(CONFIG_BLK_DEV_NVM)
+		struct bio_nvm_payload *bi_nvm; /* open-channel ssd
 								     support */
 #endif
 	};
@@ -195,7 +195,7 @@ enum rq_flag_bits {
 	__REQ_HASHED,		/* on IO scheduler merge hash */
 	__REQ_MQ_INFLIGHT,	/* track inflight for MQ */
 	__REQ_NO_TIMEOUT,	/* requests may never expire */
-	__REQ_NVM_MAPPED,	/* lightnvm mapped this request */
+	__REQ_NVM_MAPPED,	/* NVM mapped this request */
 	__REQ_NVM_NO_INFLIGHT,	/* request should not use inflight protection */
 	__REQ_NR_BITS,		/* stops here */
 };

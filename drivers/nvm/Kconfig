@@ -1,0 +1,29 @@
+#
+# Open-Channel SSD NVM configuration
+#
+
+menuconfig NVM
+	bool "Open-Channel SSD target support"
+	depends on BLK_DEV_NVM
+	help
+	  Say Y here to get to enable Open-channel SSDs.
+
+	  Open-Channel SSDs implement a set of extension to SSDs, that
+	  exposes direct access to the underlying non-volatile memory.
+
+	  If you say N, all options in this submenu will be skipped and disabled
+	  only do this if you know what you are doing.
+
+if NVM
+
+config NVM_RRPC
+	tristate "Round-robin Hybrid Open-Channel SSD"
+	depends on BLK_DEV_NVM
+	---help---
+	Allows an open-channel SSD to be exposed as a block device to the
+	host. The target is implemented using a linear mapping table and
+	cost-based garbage collection. It is optimized for 4K IO sizes.
+
+	See Documentation/nvm-rrpc.txt for details.
+
+endif # NVM

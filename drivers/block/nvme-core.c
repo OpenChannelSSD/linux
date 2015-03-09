@@ -38,7 +38,7 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/types.h>
-#include <linux/lightnvm.h>
+#include <linux/nvm.h>
 #include <scsi/sg.h>
 #include <asm-generic/io-64-nonatomic-lo-hi.h>
 
@@ -1687,7 +1687,7 @@ static struct blk_mq_ops nvme_mq_admin_ops = {
 	.timeout	= nvme_timeout,
 };
 
-static struct lightnvm_dev_ops nvme_nvm_dev_ops = {
+static struct nvm_dev_ops nvme_nvm_dev_ops = {
 	.identify		= nvme_nvm_identify,
 	.get_features		= nvme_nvm_get_features,
 	.set_responsibility	= nvme_nvm_set_responsibility,
@@ -2304,8 +2304,8 @@ static struct nvme_ns *nvme_alloc_ns(struct nvme_dev *dev, unsigned nsid,
 	if (dev->oncs & NVME_CTRL_ONCS_DSM)
 		nvme_config_discard(ns);
 
-	if (id->nsfeat & NVME_NS_FEAT_LIGHTNVM) {
-		if (blk_lightnvm_register(ns->queue, &nvme_nvm_dev_ops))
+	if (id->nsfeat & NVME_NS_FEAT_NVM) {
+		if (blk_nvm_register(ns->queue, &nvme_nvm_dev_ops))
 			goto out_put_disk;
 
 		/* FIXME: This will be handled later by ns */
@@ -2452,7 +2452,7 @@ static int nvme_dev_add(struct nvme_dev *dev)
 	dma_addr_t dma_addr;
 	u64 cap = readq(&dev->bar->cap);
 	int shift = NVME_CAP_MPSMIN(cap) + 12;
-	int lightnvm_cmdset = NVME_CAP_LIGHTNVM(cap);
+	int nvm_cmdset = NVME_CAP_NVM(cap);
 
 	mem = dma_alloc_coherent(&pdev->dev, 8192, &dma_addr, GFP_KERNEL);
 	if (!mem)
@@ -2500,9 +2500,9 @@ static int nvme_dev_add(struct nvme_dev *dev)
 	dev->tagset.flags = BLK_MQ_F_SHOULD_MERGE;
 	dev->tagset.driver_data = dev;
 
-	if (lightnvm_cmdset) {
+	if (nvm_cmdset) {
 		dev->tagset.flags &= ~BLK_MQ_F_SHOULD_MERGE;
-		dev->tagset.flags |= BLK_MQ_F_LIGHTNVM;
+		dev->tagset.flags |= BLK_MQ_F_NVM;
 	}
 
 	if (blk_mq_alloc_tag_set(&dev->tagset))

@@ -568,7 +568,7 @@ int blk_register_queue(struct gendisk *disk)
 	if (ret)
 		return ret;
 
-	if (blk_queue_lightnvm(q))
+	if (blk_queue_nvm(q))
 	{
 		ret = blk_nvm_init_sysfs(dev);
 		if (ret)
@@ -608,7 +608,7 @@ void blk_unregister_queue(struct gendisk *disk)
 	if (WARN_ON(!q))
 		return;
 
-	if (blk_queue_lightnvm(q)) {
+	if (blk_queue_nvm(q)) {
 		blk_nvm_unregister(q);
 		blk_nvm_remove_sysfs(disk_to_dev(disk));
 	}

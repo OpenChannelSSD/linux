@@ -1,5 +1,5 @@
 /*
- * blk-lightnvm.c - Block layer LightNVM Open-channel SSD integration
+ * blk-nvm.c - Block layer Open-channel SSD integration
  *
  * Copyright (C) 2015 IT University of Copenhagen
  * Initial release: Matias Bjorling <mabj@itu.dk>
@@ -27,7 +27,7 @@
 #include <linux/sem.h>
 #include <linux/bitmap.h>
 
-#include <linux/lightnvm.h>
+#include <linux/nvm.h>
 
 static LIST_HEAD(_targets);
 static DECLARE_RWSEM(_lock);
@@ -96,7 +96,7 @@ struct nvm_block *blk_nvm_get_blk(struct nvm_lun *lun, int is_gc)
 	spin_lock(&lun->lock);
 
 	if (list_empty(&lun->free_list)) {
-		pr_err_ratelimited("lightnvm: lun %u have no free pages available",
+		pr_err_ratelimited("nvm: lun %u have no free pages available",
 								lun->id);
 		spin_unlock(&lun->lock);
 		goto out;
@@ -192,7 +192,7 @@ static int nvm_luns_init(struct nvm_dev *dev)
 
 	nvm_for_each_lun(dev, lun, i) {
 		chnl = &dev->identity.chnls[i];
-		pr_info("lightnvm: p %u qsize %u gr %u ge %u begin %llu end %llu\n",
+		pr_info("nvm: p %u qsize %u gr %u ge %u begin %llu end %llu\n",
 			i, chnl->queue_size, chnl->gran_read, chnl->gran_erase,
 			chnl->laddr_begin, chnl->laddr_end);
 
@@ -305,7 +305,7 @@ static int nvm_l2p_update(u64 slba, u64 nlb, u64 *entries, void *private)
 	u64 i;
 
 	if (unlikely(elba > dev->nr_pages)) {
-		pr_err("lightnvm: L2P data from device is out of bounds!\n");
+		pr_err("nvm: L2P data from device is out of bounds!\n");
 		return -EINVAL;
 	}
 
@@ -315,7 +315,7 @@ static int nvm_l2p_update(u64 slba, u64 nlb, u64 *entries, void *private)
 		/* LNVM treats address-spaces as silos, LBA and PBA are
 		 * equally large and zero-indexed. */
 		if (unlikely(pba >= max_pages && pba != U64_MAX)) {
-			pr_err("lightnvm: L2P data entry is out of bounds!\n");
+			pr_err("nvm: L2P data entry is out of bounds!\n");
 			return -EINVAL;
 		}
 
@@ -384,14 +384,14 @@ int nvm_init(struct nvm_dev *dev)
 
 	/* TODO: We're limited to the same setup for each channel */
 	if (dev->ops->identify(dev->q, &dev->identity)) {
-		pr_err("lightnvm: device could not be identified\n");
+		pr_err("nvm: device could not be identified\n");
 		ret = -EINVAL;
 		goto err;
 	}
 
 	max_qdepth = tag_set->queue_depth * tag_set->nr_hw_queues;
 
-	pr_debug("lightnvm dev: ver %u type %u chnls %u max qdepth: %i\n",
+	pr_debug("nvm dev: ver %u type %u chnls %u max qdepth: %i\n",
 			dev->identity.ver_id,
 			dev->identity.nvm_type,
 			dev->identity.nchannels,
@@ -399,31 +399,31 @@ int nvm_init(struct nvm_dev *dev)
 
 	ret = nvm_validate_features(dev);
 	if (ret) {
-		pr_err("lightnvm: disk features are not supported.");
+		pr_err("nvm: disk features are not supported.");
 		goto err;
 	}
 
 	ret = nvm_validate_responsibility(dev);
 	if (ret) {
-		pr_err("lightnvm: disk responsibilities are not supported.");
+		pr_err("nvm: disk responsibilities are not supported.");
 		goto err;
 	}
 
 	ret = nvm_core_init(dev, max_qdepth);
 	if (ret) {
-		pr_err("lightnvm: could not initialize core structure.\n");
+		pr_err("nvm: could not initialize core structure.\n");
 		goto err;
 	}
 
 	ret = nvm_luns_init(dev);
 	if (ret) {
-		pr_err("lightnvm: could not initialize luns\n");
+		pr_err("nvm: could not initialize luns\n");
 		goto err;
 	}
 
 	/* s->nr_pages_per_blk obtained from nvm_luns_init */
 	if (dev->nr_pages_per_blk > MAX_INVALID_PAGES_STORAGE * BITS_PER_LONG) {
-		pr_err("lightnvm: number of pages per block too high.");
+		pr_err("nvm: number of pages per block too high.");
 		ret = -EINVAL;
 		goto err;
 	}
@@ -434,23 +434,23 @@ int nvm_init(struct nvm_dev *dev)
 		ret = dev->ops->get_l2p_tbl(dev->q, 0, dev->nr_pages,
 							nvm_l2p_update, dev);
 		if (ret) {
-			pr_err("lightnvm: could not read L2P table.\n");
+			pr_err("nvm: could not read L2P table.\n");
 			goto err;
 		}
 	}
 
 	ret = nvm_blocks_init(dev);
 	if (ret) {
-		pr_err("lightnvm: could not initialize blocks\n");
+		pr_err("nvm: could not initialize blocks\n");
 		goto err;
 	}
 
-	pr_info("lightnvm: allocating %lu physical pages (%lu KB)\n",
+	pr_info("nvm: allocating %lu physical pages (%lu KB)\n",
 			dev->nr_pages, dev->nr_pages * dev->sector_size / 1024);
-	pr_info("lightnvm: luns: %u\n", dev->nr_luns);
-	pr_info("lightnvm: blocks: %u\n", dev->nr_blks_per_lun);
-	pr_info("lightnvm: target sector size=%d\n", dev->sector_size);
-	pr_info("lightnvm: pages per block: %u\n", dev->nr_pages_per_blk);
+	pr_info("nvm: luns: %u\n", dev->nr_luns);
+	pr_info("nvm: blocks: %u\n", dev->nr_blks_per_lun);
+	pr_info("nvm: target sector size=%d\n", dev->sector_size);
+	pr_info("nvm: pages per block: %u\n", dev->nr_pages_per_blk);
 
 	/* Enable garbage collection timer */
 /*	mod_timer(&dev->gc_timer, jiffies + msecs_to_jiffies(1000));*/
@@ -458,7 +458,7 @@ int nvm_init(struct nvm_dev *dev)
 	return 0;
 err:
 	nvm_free(dev);
-	pr_err("lightnvm: failed to initialize nvm\n");
+	pr_err("nvm: failed to initialize nvm\n");
 	return ret;
 }
 
@@ -467,10 +467,10 @@ void nvm_exit(struct nvm_dev *dev)
 	/* TODO: remember outstanding block refs, waiting to be erased... */
 	nvm_free(dev);
 
-	pr_info("lightnvm: successfully unloaded\n");
+	pr_info("nvm: successfully unloaded\n");
 }
 
-int blk_lightnvm_register(struct request_queue *q, struct lightnvm_dev_ops *ops)
+int blk_nvm_register(struct request_queue *q, struct nvm_dev_ops *ops)
 {
 	struct nvm_dev *dev;
 	int ret;
@@ -478,7 +478,7 @@ int blk_lightnvm_register(struct request_queue *q, struct lightnvm_dev_ops *ops)
 	if (!ops->identify || !ops->get_features)
 		return -EINVAL;
 
-	/* TODO: LightNVM does not yet support multi-page IOs. */
+	/* TODO: NVM does not yet support multi-page IOs. */
 	blk_queue_max_hw_sectors(q, queue_logical_block_size(q) >> 9);
 
 	dev = kmalloc(sizeof(struct nvm_dev), GFP_KERNEL);
@@ -499,11 +499,11 @@ err_init:
 	kfree(dev);
 	return ret;
 }
-EXPORT_SYMBOL(blk_lightnvm_register);
+EXPORT_SYMBOL(blk_nvm_register);
 
 void blk_nvm_unregister(struct request_queue *q)
 {
-	if (!blk_queue_lightnvm(q))
+	if (!blk_queue_nvm(q))
 		return;
 
 	nvm_exit(q->nvm);
@@ -553,7 +553,7 @@ static int nvm_create_disk(struct gendisk *qdisk, char *ttname, char *devname,
 
 	tt = nvm_find_target_type(ttname);
 	if (!tt) {
-		pr_err("lightnvm: target type %s not found\n", ttname);
+		pr_err("nvm: target type %s not found\n", ttname);
 		return -EINVAL;
 	}
 
@@ -625,19 +625,19 @@ static ssize_t configure_store(struct device *d, struct device_attribute *attr,
 
 	ret = sscanf(buf, "%s %s %u:%u", name, ttname, &lun_begin, &lun_end);
 	if (ret != 4) {
-		pr_err("lightnvm: configure must be in the format of \"name targetname lun_begin:lun_end\".\n");
+		pr_err("nvm: configure must be in the format of \"name targetname lun_begin:lun_end\".\n");
 		return -EINVAL;
 	}
 
 	if (lun_begin > lun_end || lun_end > dev->nr_luns) {
-		pr_err("lightnvm: lun out of bound (%u:%u > %u)\n",
+		pr_err("nvm: lun out of bound (%u:%u > %u)\n",
 					lun_begin, lun_end, dev->nr_luns);
 		return -EINVAL;
 	}
 
 	ret = nvm_create_disk(disk, name, ttname, lun_begin, lun_end);
 	if (ret)
-		pr_err("lightnvm: configure disk failed\n");
+		pr_err("nvm: configure disk failed\n");
 
 	return cnt;
 }

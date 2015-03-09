@@ -209,7 +209,7 @@ struct request {
 
 	/* for bidi */
 	struct request *next_rq;
-#if CONFIG_BLK_DEV_LIGHTNVM
+#if CONFIG_BLK_DEV_NVM
 	sector_t phys_sector;
 #endif
 };
@@ -308,7 +308,7 @@ struct queue_limits {
 	unsigned char		raid_partial_stripes_expensive;
 };
 
-#ifdef CONFIG_BLK_DEV_LIGHTNVM
+#ifdef CONFIG_BLK_DEV_NVM
 struct nvm_dev;
 #endif
 
@@ -458,7 +458,7 @@ struct request_queue {
 #ifdef CONFIG_BLK_DEV_IO_TRACE
 	struct blk_trace	*blk_trace;
 #endif
-#ifdef CONFIG_BLK_DEV_LIGHTNVM
+#ifdef CONFIG_BLK_DEV_NVM
 	struct nvm_dev *nvm;
 #endif
 	/*
@@ -519,7 +519,7 @@ struct request_queue {
 #define QUEUE_FLAG_INIT_DONE   20	/* queue is initialized */
 #define QUEUE_FLAG_NO_SG_MERGE 21	/* don't attempt to merge SG segments*/
 #define QUEUE_FLAG_SG_GAPS     22	/* queue doesn't support SG gaps */
-#define QUEUE_FLAG_LIGHTNVM    23	/* lightnvm managed queue */
+#define QUEUE_FLAG_NVM         23	/* open-channel SSD managed queue */
 
 #define QUEUE_FLAG_DEFAULT	((1 << QUEUE_FLAG_IO_STAT) |		\
 				 (1 << QUEUE_FLAG_STACKABLE)	|	\
@@ -607,7 +607,7 @@ static inline void queue_flag_clear(unsigned int flag, struct request_queue *q)
 #define blk_queue_discard(q)	test_bit(QUEUE_FLAG_DISCARD, &(q)->queue_flags)
 #define blk_queue_secdiscard(q)	(blk_queue_discard(q) && \
 	test_bit(QUEUE_FLAG_SECDISCARD, &(q)->queue_flags))
-#define blk_queue_lightnvm(q)	test_bit(QUEUE_FLAG_LIGHTNVM, &(q)->queue_flags)
+#define blk_queue_nvm(q)	test_bit(QUEUE_FLAG_NVM, &(q)->queue_flags)
 
 #define blk_noretry_request(rq) \
 	((rq)->cmd_flags & (REQ_FAILFAST_DEV|REQ_FAILFAST_TRANSPORT| \
@@ -1615,9 +1615,9 @@ static inline bool blk_integrity_is_initialized(struct gendisk *g)
 
 #endif /* CONFIG_BLK_DEV_INTEGRITY */
 
-#ifdef CONFIG_BLK_DEV_LIGHTNVM
+#ifdef CONFIG_BLK_DEV_NVM
 
-#include <uapi/linux/lightnvm.h>
+#include <uapi/linux/nvm.h>
 
 typedef int (nvm_l2p_update_fn)(u64, u64, u64 *, void *);
 typedef int (nvm_id_fn)(struct request_queue *, struct nvm_id *);
@@ -1628,7 +1628,7 @@ typedef int (nvm_get_l2p_tbl_fn)(struct request_queue *, u64, u64,
 				 nvm_l2p_update_fn *, void *);
 typedef int (nvm_erase_blk_fn)(struct request_queue *, sector_t);
 
-struct lightnvm_dev_ops {
+struct nvm_dev_ops {
 	nvm_id_fn		*identify;
 	nvm_get_features_fn	*get_features;
 	nvm_set_rsp_fn		*set_responsibility;
@@ -1643,8 +1643,8 @@ struct nvm_blocks;
  * We assume that the device exposes its channels as a linear address
  * space. A lun therefore have a phy_addr_start and phy_addr_end that
  * denotes the start and end. This abstraction is used to let the
- * lightnvm (or any other device) expose its read/write/erase interface
- * and be administrated by the host system.
+ * open-channel SSD (or any other device) expose its read/write/erase
+ * interface and be administrated by the host system.
  */
 struct nvm_lun {
 	struct nvm_dev *dev;
@@ -1692,10 +1692,10 @@ struct nvm_block {
 };
 
 struct nvm_dev {
-	struct lightnvm_dev_ops *ops;
+	struct nvm_dev_ops *ops;
 	struct request_queue *q;
 
-	/* LightNVM stores extra data after the private driver data */
+	/* Open-channel SSD stores extra data after the private driver data */
 	unsigned int drv_cmd_size;
 
 	struct nvm_lun *luns;
@@ -1759,15 +1759,15 @@ struct nvm_target_type {
 	nvm_tgt_init_fn *init;
 	nvm_tgt_exit_fn *exit;
 
-	/* For lightnvm internal use */
+	/* For open-channel SSD internal use */
 	struct list_head list;
 };
 
 extern struct nvm_target_type *nvm_find_target_type(const char *name);
 extern int nvm_register_target(struct nvm_target_type *tt);
 extern void nvm_unregister_target(struct nvm_target_type *tt);
-extern int blk_lightnvm_register(struct request_queue *,
-						struct lightnvm_dev_ops *);
+extern int blk_nvm_register(struct request_queue *,
+						struct nvm_dev_ops *);
 extern struct nvm_block *blk_nvm_get_blk(struct nvm_lun *, int);
 extern void blk_nvm_put_blk(struct nvm_block *block);
 extern int blk_nvm_erase_blk(struct nvm_dev *, struct nvm_block *);
@@ -1777,7 +1777,7 @@ static inline struct nvm_dev *blk_nvm_get_dev(struct request_queue *q)
 	return q->nvm;
 }
 #else
-struct lightnvm_dev_ops;
+struct nvm_dev_ops;
 struct nvm_lun;
 struct nvm_block;
 struct nvm_target_type;
@@ -1788,8 +1788,8 @@ struct nvm_target_type *nvm_find_target_type(const char *)
 }
 int nvm_register_target(struct nvm_target_type *tt) { return -EINVAL; }
 void nvm_unregister_target(struct nvm_target_type *tt) {}
-static inline int blk_lightnvm_register(struct request_queue *,
-						struct lightnvm_dev_ops *)
+static inline int blk_nvm_register(struct request_queue *,
+						struct nvm_dev_ops *)
 {
 	return -EINVAL;
 }
@@ -1810,7 +1810,7 @@ static inline sector_t blk_nvm_alloc_addr(struct nvm_block *block)
 {
 	return 0;
 }
-#endif /* CONFIG_BLK_DEV_LIGHTNVM */
+#endif /* CONFIG_BLK_DEV_NVM */
 
 struct block_device_operations {
 	int (*open) (struct block_device *, fmode_t);

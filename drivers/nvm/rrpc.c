@@ -166,7 +166,7 @@ static void rrpc_end_sync_bio(struct bio *bio, int error)
 	struct completion *waiting = bio->bi_private;
 
 	if (error)
-		pr_err("lightnvm: gc request failed.\n");
+		pr_err("nvm: gc request failed.\n");
 
 	complete(waiting);
 }
@@ -198,7 +198,7 @@ static int rrpc_move_valid_pages(struct rrpc *rrpc, struct nvm_block *block)
 
 	bio = bio_alloc(GFP_NOIO, 1);
 	if (!bio) {
-		pr_err("lightnvm: could not alloc bio on gc\n");
+		pr_err("nvm: could not alloc bio on gc\n");
 		return -ENOMEM;
 	}
 
@@ -261,7 +261,7 @@ static int rrpc_move_valid_pages(struct rrpc *rrpc, struct nvm_block *block)
 	bio_put(bio);
 
 	if (!bitmap_full(block->invalid_pages, rrpc->q_nvm->nr_pages_per_blk)) {
-		pr_err("lightnvm: failed to garbage collect block\n");
+		pr_err("nvm: failed to garbage collect block\n");
 		return -EIO;
 	}
 
@@ -276,7 +276,7 @@ static void rrpc_block_gc(struct work_struct *work)
 	struct nvm_block *block = gcb->block;
 	struct nvm_dev *dev = rrpc->q_nvm;
 
-	pr_debug("lightnvm: block '%d' being reclaimed\n", block->id);
+	pr_debug("nvm: block '%d' being reclaimed\n", block->id);
 
 	if (rrpc_move_valid_pages(rrpc, block))
 		goto done;
@@ -345,7 +345,7 @@ static void rrpc_lun_gc(struct work_struct *work)
 
 		BUG_ON(!block_is_full(block));
 
-		pr_debug("lightnvm: selected block '%d' as GC victim\n",
+		pr_debug("nvm: selected block '%d' as GC victim\n",
 								block->id);
 
 		gcb = mempool_alloc(rrpc->gcb_pool, GFP_ATOMIC);
@@ -607,7 +607,7 @@ static void rrpc_unprep_rq(struct request_queue *q, struct request *rq)
 	if (unlikely(!bio))
 		return;
 
-	rrpc = container_of(bio->bi_lightnvm, struct rrpc, payload);
+	rrpc = container_of(bio->bi_nvm, struct rrpc, payload);
 
 	if (rq->cmd_flags & REQ_NVM_MAPPED) {
 		__rrpc_unprep_rq(rrpc, rq);
@@ -714,12 +714,12 @@ static int rrpc_prep_rq(struct request_queue *q, struct request *rq)
 	if (unlikely(!bio))
 		return 0;
 
-	if (unlikely(!bio->bi_lightnvm)) {
-		pr_err("lightnvm: attempting to map unsupported bio\n");
+	if (unlikely(!bio->bi_nvm)) {
+		pr_err("nvm: attempting to map unsupported bio\n");
 		return BLK_MQ_RQ_QUEUE_ERROR;
 	}
 
-	rrpc = container_of(bio->bi_lightnvm, struct rrpc, payload);
+	rrpc = container_of(bio->bi_nvm, struct rrpc, payload);
 
 	return __rrpc_prep_rq(rrpc, rq);
 }
@@ -733,7 +733,7 @@ static void rrpc_make_rq(struct request_queue *q, struct bio *bio)
 		return;
 	}
 
-	bio->bi_lightnvm = &rrpc->payload;
+	bio->bi_nvm = &rrpc->payload;
 	bio->bi_bdev = rrpc->q_bdev;
 
 	generic_make_request(bio);
@@ -990,14 +990,14 @@ static void *rrpc_init(struct request_queue *q, struct gendisk *disk,
 	struct rrpc *rrpc;
 	int ret;
 
-	if (!blk_queue_lightnvm(q)) {
-		pr_err("lightnvm: block device not supported.\n");
+	if (!blk_queue_nvm(q)) {
+		pr_err("nvm: block device not supported.\n");
 		return ERR_PTR(-EINVAL);
 	}
 
 	bdev = bdget_disk(disk, 0);
 	if (blkdev_get(bdev, FMODE_WRITE | FMODE_READ, NULL)) {
-		pr_err("lightnvm: could not access backing device\n");
+		pr_err("nvm: could not access backing device\n");
 		return ERR_PTR(-EINVAL);
 	}
 
@@ -1019,7 +1019,7 @@ static void *rrpc_init(struct request_queue *q, struct gendisk *disk,
 
 	ret = rrpc_luns_init(rrpc, lun_begin, lun_end);
 	if (ret) {
-		pr_err("lightnvm: could not initialize luns\n");
+		pr_err("nvm: could not initialize luns\n");
 		goto err;
 	}
 
@@ -1028,23 +1028,23 @@ static void *rrpc_init(struct request_queue *q, struct gendisk *disk,
 
 	ret = rrpc_core_init(rrpc);
 	if (ret) {
-		pr_err("lightnvm: rrpc: could not initialize core\n");
+		pr_err("nvm: rrpc: could not initialize core\n");
 		goto err;
 	}
 
 	ret = rrpc_map_init(rrpc);
 	if (ret) {
-		pr_err("lightnvm: rrpc: could not initialize maps\n");
+		pr_err("nvm: rrpc: could not initialize maps\n");
 		goto err;
 	}
 
 	ret = rrpc_gc_init(rrpc);
 	if (ret) {
-		pr_err("lightnvm: rrpc: could not initialize gc\n");
+		pr_err("nvm: rrpc: could not initialize gc\n");
 		goto err;
 	}
 
-	pr_info("lightnvm: rrpc initialized with %u luns and %llu pages.\n",
+	pr_info("nvm: rrpc initialized with %u luns and %llu pages.\n",
 			rrpc->nr_luns, (unsigned long long)rrpc->nr_pages);
 
 	mod_timer(&rrpc->gc_timer, jiffies + msecs_to_jiffies(10));

@@ -219,7 +219,7 @@ static void blk_mq_rq_ctx_init(struct request_queue *q, struct blk_mq_ctx *ctx,
 	rq->end_io = NULL;
 	rq->end_io_data = NULL;
 	rq->next_rq = NULL;
-#if CONFIG_BLK_DEV_LIGHTNVM
+#if CONFIG_BLK_DEV_NVM
 	rq->phys_sector = 0;
 #endif
 
@@ -1465,7 +1465,7 @@ static struct blk_mq_tags *blk_mq_init_rq_map(struct blk_mq_tag_set *set,
 		return NULL;
 	}
 
-	if (set->flags & BLK_MQ_F_LIGHTNVM)
+	if (set->flags & BLK_MQ_F_NVM)
 		cmd_size += sizeof(struct nvm_per_rq);
 
 	/*
@@ -1986,8 +1986,8 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_tag_set *set)
 	if (!(set->flags & BLK_MQ_F_SG_MERGE))
 		q->queue_flags |= 1 << QUEUE_FLAG_NO_SG_MERGE;
 
-	if (set->flags & BLK_MQ_F_LIGHTNVM)
-		q->queue_flags |= 1 << QUEUE_FLAG_LIGHTNVM;
+	if (set->flags & BLK_MQ_F_NVM)
+		q->queue_flags |= 1 << QUEUE_FLAG_NVM;
 
 	q->sg_reserved_size = INT_MAX;
 

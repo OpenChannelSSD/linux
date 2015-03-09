@@ -13,7 +13,7 @@
 #include <linux/module.h>
 #include <linux/kthread.h>
 
-#include <linux/lightnvm.h>
+#include <linux/nvm.h>
 
 /* We partition the namespace of translation map into these pieces for tracking
  * in-flight addresses. */
@@ -48,7 +48,7 @@ struct rrpc_lun {
 };
 
 struct rrpc {
-	struct bio_lightnvm_payload payload;
+	struct bio_nvm_payload payload;
 
 	struct nvm_dev *q_nvm;
 	struct request_queue *q_dev;
