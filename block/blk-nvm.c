@@ -53,6 +53,7 @@ int nvm_register_target(struct nvm_target_type *tt)
 	else
 		list_add(&tt->list, &_targets);
 	up_write(&_lock);
+
 	return ret;
 }
 
@@ -76,7 +77,7 @@ static void nvm_reset_block(struct nvm_dev *dev, struct nvm_block *block)
 	spin_unlock(&block->lock);
 }
 
-/* use lun_[get/put]_block to administer the blocks in use for each lun.
+/* use blk_nvm_lun_[get/put]_block to administer the blocks in use for each lun.
  * Whenever a block is in used by an append point, we store it within the
  * used_list. We then move it back when its free to be used by another append
  * point.
@@ -209,13 +210,11 @@ static int nvm_luns_init(struct nvm_dev *dev)
 				(chnl->laddr_end - chnl->laddr_begin + 1) /
 				(chnl->gran_erase / chnl->gran_read);
 
-		/* TODO: Global values derived from variable size luns */
 		dev->total_blocks += lun->nr_blocks;
-		/* TODO: make blks per lun variable amond channels */
+		/* TODO: make blks per lun variable among luns */
 		dev->nr_blks_per_lun = lun->nr_free_blocks;
-		/* TODO: gran_{read,write} may differ */
-		dev->nr_pages_per_blk = chnl->gran_erase / chnl->gran_read *
-					(chnl->gran_read / dev->sector_size);
+		dev->nr_pages_per_blk = chnl->gran_erase / chnl->gran_write *
+					(chnl->gran_write / dev->sector_size);
 		lun->nr_pages_per_blk = dev->nr_pages_per_blk;
 	}
 
@@ -237,11 +236,11 @@ static int nvm_block_map(struct nvm_dev *dev, struct nvm_block *block)
 		paddr = block_to_addr(block) + offset;
 
 		/* FIXME */
-	//	laddr = s->mgmt_target->nvm_map_get_addr(s->mgmt_data, paddr);
-	//	if (!laddr)
-	//		continue;
+/*		laddr = s->mgmt_target->nvm_map_get_addr(s->mgmt_data, paddr);
+		if (!laddr)
+			continue;
 
-/*		if (paddr == laddr->addr) {
+		if (paddr == laddr->addr) {
 			laddr->block = block;
 		} else {
 			set_bit(offset, block->invalid_pages);
@@ -323,8 +322,9 @@ static int nvm_l2p_update(u64 slba, u64 nlb, u64 *entries, void *private)
 			continue;
 
 		/* FIXME */
-		//if (s->mgmt_target->update_map(s->mgmtdata, slba, pba - 1, i))
-		//	return -EINVAL;
+		/*if (s->mgmt_target->update_map(s->mgmtdata, slba, pba - 1, i))
+		 *	return -EINVAL;
+		 */
 	}
 
 	return 0;
@@ -375,8 +375,8 @@ int nvm_validate_responsibility(struct nvm_dev *dev)
 
 int nvm_init(struct nvm_dev *dev)
 {
-	int max_qdepth;
 	struct blk_mq_tag_set *tag_set = dev->q->tag_set;
+	int max_qdepth;
 	int ret = 0;
 
 	if (!dev->q || !dev->ops)
@@ -451,9 +451,6 @@ int nvm_init(struct nvm_dev *dev)
 	pr_info("nvm: blocks: %u\n", dev->nr_blks_per_lun);
 	pr_info("nvm: target sector size=%d\n", dev->sector_size);
 	pr_info("nvm: pages per block: %u\n", dev->nr_pages_per_blk);
-
-	/* Enable garbage collection timer */
-/*	mod_timer(&dev->gc_timer, jiffies + msecs_to_jiffies(1000));*/
 
 	return 0;
 err:
