@@ -82,12 +82,11 @@ struct bio {
 #if defined(CONFIG_BLK_DEV_INTEGRITY)
 		struct bio_integrity_payload *bi_integrity; /* data integrity */
 #endif
+	};
 #if defined(CONFIG_BLK_DEV_NVM)
-		struct bio_nvm_payload *bi_nvm; /* open-channel ssd
+	struct bio_nvm_payload *bi_nvm; /* open-channel ssd
 								     support */
 #endif
-	};
-
 	unsigned short		bi_vcnt;	/* how many bio_vec's */
 
 	/*
