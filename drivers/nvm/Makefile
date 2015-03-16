@@ -1,5 +1,5 @@
 #
-# Makefile for LightNVM.
+# Makefile for Open-Channel SSDs.
 #
 
-obj-$(CONFIG_LIGHTNVM)		+= rrpc.o
+obj-$(CONFIG_NVM)		+= rrpc.o

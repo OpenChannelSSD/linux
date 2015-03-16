@@ -1,5 +1,5 @@
-#ifndef LIGHTNVM_H
-#define LIGHTNVM_H
+#ifndef NVM_H
+#define NVM_H
 
 #include <linux/blkdev.h>
 #include <linux/types.h>
