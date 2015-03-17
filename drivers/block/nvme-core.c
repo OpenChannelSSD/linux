@@ -638,7 +638,7 @@ static int nvme_submit_lnvm_iod(struct nvme_queue *nvmeq, struct nvme_iod *iod,
 	cmnd->lnvm_rw.length = cpu_to_le16((blk_rq_bytes(req) >> ns->lba_shift) - 1);
 	cmnd->lnvm_rw.control = cpu_to_le16(control);
 	cmnd->lnvm_rw.dsmgmt = cpu_to_le32(dsmgmt);
-	cmnd->lnvm_rw.phys_addr = cpu_to_le64(nvme_block_nr(ns, req->phys_sector) + 1);
+	cmnd->lnvm_rw.phys_addr = cpu_to_le64(nvme_block_nr(ns, req->phys_sector));
 
 	if (++nvmeq->sq_tail == nvmeq->q_depth)
 		nvmeq->sq_tail = 0;

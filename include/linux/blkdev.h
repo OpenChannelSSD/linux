@@ -1686,7 +1686,7 @@ struct nvm_block {
 	unsigned int nr_invalid_pages;
 
 	unsigned int id;
-
+	int type;
 	/* Persistent data structures */
 	atomic_t data_cmnt_size; /* data pages committed to stable storage */
 };
@@ -1741,8 +1741,8 @@ typedef void (nvm_tgt_make_rq)(struct request_queue *, struct bio *);
 typedef int (nvm_tgt_prep_rq)(struct request_queue *, struct request *);
 typedef void (nvm_tgt_unprep_rq)(struct request_queue *, struct request *);
 typedef sector_t (nvm_tgt_capacity)(void *);
-typedef void *(nvm_tgt_init_fn)(struct request_queue *, struct gendisk *,
-								int, int);
+typedef void *(nvm_tgt_init_fn)(struct request_queue *, struct request_queue *,
+						struct gendisk *, int, int);
 typedef void (nvm_tgt_exit_fn)(void *);
 
 struct nvm_target_type {

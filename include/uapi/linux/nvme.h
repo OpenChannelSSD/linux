@@ -249,7 +249,6 @@ enum lnvme_opcode {
 	lnvm_cmd_phys_write	= 0xE2,
 	lnvm_cmd_phys_read	= 0xE3,
 	lnvm_cmd_erase_sync	= 0xE4,
-	lnvm_cmd_erase_async	= 0xE5,
 };
 
 struct nvme_common_command {

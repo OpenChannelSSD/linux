@@ -221,37 +221,56 @@ static int nvm_luns_init(struct nvm_dev *dev)
 	return 0;
 }
 
-/*
- * Looks up the logical address from reverse trans map and check if its valid by
- * comparing the logical to physical address with the physical address.
- * Returns 0 on free, otherwise 1 if in use
- */
-static int nvm_block_map(struct nvm_dev *dev, struct nvm_block *block)
+static int nvm_block_map(u64 slba, u64 nlb, u64 *entries, void *private)
 {
-	int offset, used = 0;
-	struct nvm_addr *laddr;
-	sector_t paddr, pladdr;
+	struct nvm_dev *dev = private;
+	sector_t max_pages = dev->nr_pages * (dev->sector_size >> 9);
+	u64 elba = slba + nlb;
+	struct nvm_lun *lun;
+	struct nvm_block *blk;
+	sector_t total_blks_per_lun;
+	u64 i;
+	int lun_id;
 
-	for (offset = 0; offset < dev->nr_pages_per_blk; offset++) {
-		paddr = block_to_addr(block) + offset;
-
-		/* FIXME */
-/*		laddr = s->mgmt_target->nvm_map_get_addr(s->mgmt_data, paddr);
-		if (!laddr)
-			continue;
-
-		if (paddr == laddr->addr) {
-			laddr->block = block;
-		} else {
-			set_bit(offset, block->invalid_pages);
-			block->nr_invalid_pages++;
-		}
-
-		used = 1;
-		*/
+	if (unlikely(elba > dev->nr_pages)) {
+		pr_err("nvm: L2P data from device is out of bounds!\n");
+		return -EINVAL;
 	}
 
-	return used;
+	total_blks_per_lun = dev->nr_blks_per_lun * dev->nr_pages_per_blk;
+
+	for (i = 0; i < nlb; i++) {
+		u64 pba = le64_to_cpu(entries[i]);
+
+		if (unlikely(pba >= max_pages && pba != U64_MAX)) {
+			pr_err("nvm: L2P data entry is out of bounds!\n");
+			return -EINVAL;
+		}
+
+		/* Address zero is a special one. The first page on a disk is
+		 * protected. As it often holds internal device boot
+		 * information. */
+		if (!pba)
+			continue;
+
+		/* resolve block from physical address */
+		lun_id = pba / total_blks_per_lun;
+		lun = &dev->luns[lun_id];
+
+		/* Calculate block offset into lun */
+		pba = pba - (total_blks_per_lun * lun_id);
+		blk = &lun->blocks[pba / dev->nr_pages_per_blk];
+
+		if (!blk->type) {
+			/* at this point, we don't know anything about the
+			 * block. It's up to the FTL on top to re-etablish the
+			 * block state */
+			list_move_tail(&blk->list, &lun->used_list);
+			blk->type = 1;
+		}
+	}
+
+	return 0;
 }
 
 static int nvm_blocks_init(struct nvm_dev *dev)
@@ -259,6 +278,7 @@ static int nvm_blocks_init(struct nvm_dev *dev)
 	struct nvm_lun *lun;
 	struct nvm_block *block;
 	sector_t lun_iter, block_iter, cur_block_id = 0;
+	int ret;
 
 	nvm_for_each_lun(dev, lun, lun_iter) {
 		lun->blocks = vzalloc(sizeof(struct nvm_block) *
@@ -273,10 +293,22 @@ static int nvm_blocks_init(struct nvm_dev *dev)
 			block->lun = lun;
 			block->id = cur_block_id++;
 
-			if (nvm_block_map(dev, block))
-				list_add_tail(&block->list, &lun->used_list);
-			else
-				list_add_tail(&block->list, &lun->free_list);
+			/* First block is reserved for device */
+			if (unlikely(lun_iter == 0 && block_iter == 0))
+				continue;
+
+			list_add_tail(&block->list, &lun->free_list);
+		}
+	}
+
+	/* Without bad block table support, we can use the mapping table to get
+	   restore the state of each block. */
+	if (dev->ops->get_l2p_tbl) {
+		ret = dev->ops->get_l2p_tbl(dev->q, 0, dev->nr_pages,
+							nvm_block_map, dev);
+		if (ret) {
+			pr_err("nvm: could not read L2P table.\n");
+			pr_warn("nvm: default block initialization");
 		}
 	}
 
@@ -292,40 +324,6 @@ static int nvm_core_init(struct nvm_dev *dev, int max_qdepth)
 {
 	dev->nr_luns = dev->identity.nchannels;
 	dev->sector_size = EXPOSED_PAGE_SIZE;
-
-	return 0;
-}
-
-static int nvm_l2p_update(u64 slba, u64 nlb, u64 *entries, void *private)
-{
-	struct nvm_dev *dev = (struct nvm_dev *)private;
-	sector_t max_pages = dev->nr_pages * (dev->sector_size >> 9);
-	u64 elba = slba + nlb;
-	u64 i;
-
-	if (unlikely(elba > dev->nr_pages)) {
-		pr_err("nvm: L2P data from device is out of bounds!\n");
-		return -EINVAL;
-	}
-
-	for (i = 0; i < nlb; i++) {
-		/* notice that the values are 1-indexed. 0 is unmapped */
-		u64 pba = le64_to_cpu(entries[i]);
-		/* LNVM treats address-spaces as silos, LBA and PBA are
-		 * equally large and zero-indexed. */
-		if (unlikely(pba >= max_pages && pba != U64_MAX)) {
-			pr_err("nvm: L2P data entry is out of bounds!\n");
-			return -EINVAL;
-		}
-
-		if (!pba)
-			continue;
-
-		/* FIXME */
-		/*if (s->mgmt_target->update_map(s->mgmtdata, slba, pba - 1, i))
-		 *	return -EINVAL;
-		 */
-	}
 
 	return 0;
 }
@@ -429,15 +427,6 @@ int nvm_init(struct nvm_dev *dev)
 	}
 	dev->nr_pages = dev->nr_luns * dev->nr_blks_per_lun *
 							dev->nr_pages_per_blk;
-
-	if (dev->ops->get_l2p_tbl) {
-		ret = dev->ops->get_l2p_tbl(dev->q, 0, dev->nr_pages,
-							nvm_l2p_update, dev);
-		if (ret) {
-			pr_err("nvm: could not read L2P table.\n");
-			goto err;
-		}
-	}
 
 	ret = nvm_blocks_init(dev);
 	if (ret) {
@@ -544,7 +533,7 @@ static int nvm_create_disk(struct gendisk *qdisk, char *ttname, char *devname,
 						int lun_begin, int lun_end)
 {
 	struct gendisk *disk;
-	struct request_queue *q, *qnvm = qdisk->queue;
+	struct request_queue *qtarget, *qdev = qdisk->queue;
 	struct nvm_target_type *tt;
 	void *target;
 
@@ -554,35 +543,36 @@ static int nvm_create_disk(struct gendisk *qdisk, char *ttname, char *devname,
 		return -EINVAL;
 	}
 
-	q = blk_alloc_queue(GFP_KERNEL);
-	if (!q)
+	qtarget = blk_alloc_queue_node(GFP_KERNEL, qdev->node);
+	if (!qtarget)
 		return -ENOMEM;
+	blk_queue_make_request(qtarget, tt->make_rq);
 
-	target = tt->init(qnvm, qdisk, lun_begin, lun_end);
+	target = tt->init(qdev, qtarget, qdisk, lun_begin, lun_end);
 	if (IS_ERR(target)) {
-		blk_cleanup_queue(q);
+		blk_cleanup_queue(qtarget);
 		return -ENOMEM;
 	}
 
 	disk = alloc_disk(0);
 	if (!disk) {
 		tt->exit(target);
-		blk_cleanup_queue(q);
+		blk_cleanup_queue(qtarget);
 		return -ENOMEM;
 	}
 
-	q->queuedata = target;
-	blk_queue_make_request(q, tt->make_rq);
-	blk_queue_prep_rq(qnvm, tt->prep_rq);
-	blk_queue_unprep_rq(qnvm, tt->unprep_rq);
+	qtarget->queuedata = target;
+
+	blk_queue_prep_rq(qdev, tt->prep_rq);
+	blk_queue_unprep_rq(qdev, tt->unprep_rq);
 
 	sprintf(disk->disk_name, "%s", devname);
-	disk->flags |= GENHD_FL_EXT_DEVT;
+	disk->flags = GENHD_FL_EXT_DEVT;
 	disk->major = 0;
 	disk->first_minor = 0;
 	disk->fops = &nvm_fops;
 	disk->private_data = target;
-	disk->queue = q;
+	disk->queue = qtarget;
 
 	set_capacity(disk, tt->capacity(target));
 

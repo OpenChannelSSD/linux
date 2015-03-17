@@ -537,31 +537,6 @@ err:
 	return NULL;
 }
 
-static int rrpc_map_update(void *targetdata, u64 slba, u64 pba, u64 blk_page)
-{
-	struct rrpc *rrpc = targetdata;
-	struct nvm_addr *addr = rrpc->trans_map + slba;
-	struct nvm_rev_addr *raddr = rrpc->rev_trans_map;
-
-	addr[blk_page].addr = pba;
-	/* FIXME: missing rrpc->poffset */
-	raddr[pba].addr = slba + blk_page;
-
-	return 0;
-}
-
-static struct nvm_addr *rrpc_map_get_addr(void *targetdata, sector_t paddr)
-{
-	struct rrpc *rrpc = targetdata;
-	sector_t pladdr;
-
-	pladdr = rrpc->rev_trans_map[paddr - rrpc->poffset].addr;
-	if (pladdr == ADDR_EMPTY)
-		return NULL;
-
-	return &rrpc->trans_map[pladdr];
-}
-
 static void __rrpc_unprep_rq(struct rrpc *rrpc, struct request *rq)
 {
 	struct nvm_per_rq *pb = get_per_rq_data(rq);
@@ -653,6 +628,11 @@ static int rrpc_read_rq(struct rrpc *rrpc, struct request *rq)
 	if (p->block)
 		rq->phys_sector = nvm_get_sector(p->addr) +
 					(blk_rq_pos(rq) % NR_PHY_IN_LOG);
+	else {
+		rrpc_unlock_rq(rrpc, rq);
+		blk_mq_end_request(rq, 0);
+		return BLK_MQ_RQ_QUEUE_DONE;
+	}
 
 	pb = get_per_rq_data(rq);
 	pb->addr = p;
@@ -786,9 +766,48 @@ static void rrpc_map_free(struct rrpc *rrpc)
 	vfree(rrpc->trans_map);
 }
 
+static int rrpc_l2p_update(u64 slba, u64 nlb, u64 *entries, void *private)
+{
+	struct rrpc *rrpc = (struct rrpc *)private;
+	struct nvm_dev *dev = rrpc->q_nvm;
+	struct nvm_addr *addr = rrpc->trans_map + slba;
+	struct nvm_rev_addr *raddr = rrpc->rev_trans_map;
+	sector_t max_pages = dev->nr_pages * (dev->sector_size >> 9);
+	u64 elba = slba + nlb;
+	u64 i;
+
+	if (unlikely(elba > dev->nr_pages)) {
+		pr_err("nvm: L2P data from device is out of bounds!\n");
+		return -EINVAL;
+	}
+
+	for (i = 0; i < nlb; i++) {
+		u64 pba = le64_to_cpu(entries[i]);
+		/* LNVM treats address-spaces as silos, LBA and PBA are
+		 * equally large and zero-indexed. */
+		if (unlikely(pba >= max_pages && pba != U64_MAX)) {
+			pr_err("nvm: L2P data entry is out of bounds!\n");
+			return -EINVAL;
+		}
+
+		/* Address zero is a special one. The first page on a disk is
+		 * protected. As it often holds internal device boot
+		 * information. */
+		if (!pba)
+			continue;
+
+		addr[i].addr = pba;
+		raddr[pba].addr = slba + i;
+	}
+
+	return 0;
+}
+
 static int rrpc_map_init(struct rrpc *rrpc)
 {
+	struct nvm_dev *dev = rrpc->q_nvm;
 	sector_t i;
+	int ret;
 
 	rrpc->trans_map = vzalloc(sizeof(struct nvm_addr) * rrpc->nr_pages);
 	if (!rrpc->trans_map)
@@ -805,6 +824,17 @@ static int rrpc_map_init(struct rrpc *rrpc)
 
 		p->addr = ADDR_EMPTY;
 		r->addr = ADDR_EMPTY;
+	}
+
+	if (!dev->ops->get_l2p_tbl)
+		return 0;
+
+	/* Bring up the mapping table from device */
+	ret = dev->ops->get_l2p_tbl(dev->q, 0, dev->nr_pages, rrpc_l2p_update,
+									rrpc);
+	if (ret) {
+		pr_err("nvm: rrpc: could not read L2P table.\n");
+		return -EINVAL;
 	}
 
 	return 0;
@@ -909,13 +939,6 @@ static int rrpc_luns_init(struct rrpc *rrpc, int lun_begin, int lun_end)
 		rrpc->total_blocks += lun->nr_blocks;
 		rrpc->nr_pages += lun->nr_blocks * lun->nr_pages_per_blk;
 
-		block = blk_nvm_get_blk(lun, 0);
-		rrpc_set_lun_cur(rlun, block);
-
-		/* Emergency gc block */
-		block = blk_nvm_get_blk(lun, 1);
-		rlun->gc_cur = block;
-
 		INIT_LIST_HEAD(&rlun->prio_list);
 		INIT_WORK(&rlun->ws_gc, rrpc_lun_gc);
 		spin_lock_init(&rlun->lock);
@@ -982,7 +1005,80 @@ static sector_t rrpc_capacity(void *private)
 	return ((rrpc->nr_pages - reserved) / 10) * 9 * NR_PHY_IN_LOG;
 }
 
-static void *rrpc_init(struct request_queue *q, struct gendisk *disk,
+/*
+ * Looks up the logical address from reverse trans map and check if its valid by
+ * comparing the logical to physical address with the physical address.
+ * Returns 0 on free, otherwise 1 if in use
+ */
+static void rrpc_block_map_update(struct rrpc *rrpc, struct nvm_block *block)
+{
+	struct nvm_lun *lun = block->lun;
+	int offset;
+	struct nvm_addr *laddr;
+	sector_t paddr, pladdr;
+
+	for (offset = 0; offset < lun->nr_pages_per_blk; offset++) {
+		paddr = block_to_addr(block) + offset;
+
+		pladdr = rrpc->rev_trans_map[paddr].addr;
+		if (pladdr == ADDR_EMPTY)
+			continue;
+
+		laddr = &rrpc->trans_map[pladdr];
+
+		if (paddr == laddr->addr) {
+			laddr->block = block;
+		} else {
+			set_bit(offset, block->invalid_pages);
+			block->nr_invalid_pages++;
+		}
+	}
+}
+
+static int rrpc_blocks_init(struct rrpc *rrpc)
+{
+	struct nvm_dev *dev = rrpc->q_nvm;
+	struct nvm_lun *lun;
+	struct nvm_block *blk;
+	sector_t lun_iter, blk_iter;
+
+	for (lun_iter = 0; lun_iter < rrpc->nr_luns; lun_iter++) {
+		lun = &dev->luns[lun_iter + rrpc->lun_offset];
+
+		lun_for_each_block(lun, blk, blk_iter)
+			rrpc_block_map_update(rrpc, blk);
+	}
+
+	return 0;
+}
+
+static int rrpc_luns_configure(struct rrpc *rrpc)
+{
+	struct rrpc_lun *rlun;
+	struct nvm_block *blk;
+	int i;
+
+	for (i = 0; i < rrpc->nr_luns; i++) {
+		rlun = &rrpc->luns[i];
+
+		blk = blk_nvm_get_blk(rlun->parent, 0);
+		if (!blk)
+			return -EINVAL;
+
+		rrpc_set_lun_cur(rlun, blk);
+
+		/* Emergency gc block */
+		blk = blk_nvm_get_blk(rlun->parent, 1);
+		if (!blk)
+			return -EINVAL;
+		rlun->gc_cur = blk;
+	}
+
+	return 0;
+}
+
+static void *rrpc_init(struct request_queue *qdev,
+			struct request_queue *qtarget, struct gendisk *disk,
 						int lun_begin, int lun_end)
 {
 	struct nvm_dev *dev;
@@ -990,7 +1086,7 @@ static void *rrpc_init(struct request_queue *q, struct gendisk *disk,
 	struct rrpc *rrpc;
 	int ret;
 
-	if (!blk_queue_nvm(q)) {
+	if (!blk_queue_nvm(qdev)) {
 		pr_err("nvm: block device not supported.\n");
 		return ERR_PTR(-EINVAL);
 	}
@@ -1001,7 +1097,7 @@ static void *rrpc_init(struct request_queue *q, struct gendisk *disk,
 		return ERR_PTR(-EINVAL);
 	}
 
-	dev = blk_nvm_get_dev(q);
+	dev = blk_nvm_get_dev(qdev);
 
 	rrpc = kzalloc(sizeof(struct rrpc), GFP_KERNEL);
 	if (!rrpc) {
@@ -1009,8 +1105,8 @@ static void *rrpc_init(struct request_queue *q, struct gendisk *disk,
 		goto err;
 	}
 
-	rrpc->q_dev = q;
-	rrpc->q_nvm = q->nvm;
+	rrpc->q_dev = qdev;
+	rrpc->q_nvm = qdev->nvm;
 	rrpc->q_bdev = bdev;
 	rrpc->nr_luns = lun_end - lun_begin + 1;
 
@@ -1038,11 +1134,27 @@ static void *rrpc_init(struct request_queue *q, struct gendisk *disk,
 		goto err;
 	}
 
+	ret = rrpc_blocks_init(rrpc);
+	if (ret) {
+		pr_err("nvm: rrpc: could not initialize state for blocks\n");
+		goto err;
+	}
+
+	ret = rrpc_luns_configure(rrpc);
+	if (ret) {
+		pr_err("nvm: rrpc: not enough blocks available in LUNs.\n");
+		goto err;
+	}
+
 	ret = rrpc_gc_init(rrpc);
 	if (ret) {
 		pr_err("nvm: rrpc: could not initialize gc\n");
 		goto err;
 	}
+
+	/* make sure to inherit the size from the underlying device */
+	blk_queue_logical_block_size(qtarget, queue_physical_block_size(qdev));
+	blk_queue_max_hw_sectors(qtarget, queue_max_hw_sectors(qdev));
 
 	pr_info("nvm: rrpc initialized with %u luns and %llu pages.\n",
 			rrpc->nr_luns, (unsigned long long)rrpc->nr_pages);
@@ -1063,7 +1175,9 @@ static struct nvm_target_type tt_rrpc = {
 	.make_rq	= rrpc_make_rq,
 	.prep_rq	= rrpc_prep_rq,
 	.unprep_rq	= rrpc_unprep_rq,
+
 	.capacity	= rrpc_capacity,
+
 	.init		= rrpc_init,
 	.exit		= rrpc_exit,
 };
