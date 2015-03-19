@@ -166,4 +166,4 @@ obj-$(CONFIG_THUNDERBOLT)	+= thunderbolt/
 obj-$(CONFIG_CORESIGHT)		+= coresight/
 obj-$(CONFIG_ANDROID)		+= android/
 
-obj-$(CONFIG_NVM)		+= nvm/
+obj-$(CONFIG_NVM)		+= lightnvm/
