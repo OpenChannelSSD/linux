@@ -695,8 +695,11 @@ static int rrpc_prep_rq(struct request_queue *q, struct request *rq)
 		return 0;
 
 	if (unlikely(!bio->bi_nvm)) {
-		pr_err("nvm: attempting to map unsupported bio\n");
-		return BLK_MQ_RQ_QUEUE_ERROR;
+		if (bio_data_dir(bio) == WRITE) {
+			pr_warn("nvm: attempting to write without FTL.\n");
+			return BLK_MQ_RQ_QUEUE_ERROR;
+		}
+		return BLK_MQ_RQ_QUEUE_OK;
 	}
 
 	rrpc = container_of(bio->bi_nvm, struct rrpc, payload);
