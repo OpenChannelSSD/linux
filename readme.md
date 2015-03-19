@@ -66,9 +66,9 @@ A couple of open platforms are currently being ported to utilize LightNVM:
    A complete development board with FPGA, ARM Cortex A9 and FPGA-accelerated
    host access.
 
-# Draft Specification
+# LightNVM Specification
 
-We are currently creating a draft specification as more and more of the
+We are currently creating a specification as more and more of the
 host/device interface is stabilized. Please see this Google document. It's open
 for comments.
 
