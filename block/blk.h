@@ -282,6 +282,12 @@ static inline void blk_throtl_exit(struct request_queue *q) { }
 #endif /* CONFIG_BLK_DEV_THROTTLING */
 
 #ifdef CONFIG_BLK_DEV_NVM
+struct nvm_target {
+	struct list_head list;
+	struct nvm_target_type *type;
+	struct gendisk *disk;
+};
+
 struct nvm_dev_ops;
 
 extern void blk_nvm_unregister(struct request_queue *);

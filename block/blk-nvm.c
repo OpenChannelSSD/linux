@@ -29,6 +29,8 @@
 
 #include <linux/nvm.h>
 
+#include "blk.h"
+
 static LIST_HEAD(_targets);
 static DECLARE_RWSEM(_lock);
 
@@ -324,6 +326,7 @@ static int nvm_core_init(struct nvm_dev *dev, int max_qdepth)
 {
 	dev->nr_luns = dev->identity.nchannels;
 	dev->sector_size = EXPOSED_PAGE_SIZE;
+	INIT_LIST_HEAD(&dev->online_targets);
 
 	return 0;
 }
@@ -409,7 +412,7 @@ int nvm_init(struct nvm_dev *dev)
 
 	ret = nvm_core_init(dev, max_qdepth);
 	if (ret) {
-		pr_err("nvm: could not initialize core structure.\n");
+		pr_err("nvm: could not initialize core structures.\n");
 		goto err;
 	}
 
@@ -501,16 +504,6 @@ static int nvm_ioctl(struct block_device *bdev, fmode_t mode, unsigned int cmd,
 	return 0;
 }
 
-#ifdef CONFIG_COMPAT
-static int nvm_compat_ioctl(struct block_device *bdev, fmode_t mode,
-					unsigned int cmd, unsigned long arg)
-{
-	return 0;
-}
-#else
-#define nvme_compat_ioctl	NULL
-#endif
-
 static int nvm_open(struct block_device *bdev, fmode_t mode)
 {
 	return 0;
@@ -524,18 +517,20 @@ static void nvm_release(struct gendisk *disk, fmode_t mode)
 static const struct block_device_operations nvm_fops = {
 	.owner		= THIS_MODULE,
 	.ioctl		= nvm_ioctl,
-	.compat_ioctl	= nvm_compat_ioctl,
 	.open		= nvm_open,
 	.release	= nvm_release,
 };
 
-static int nvm_create_disk(struct gendisk *qdisk, char *ttname, char *devname,
+static int nvm_create_target(struct gendisk *qdisk, char *ttname, char *devname,
 						int lun_begin, int lun_end)
 {
-	struct gendisk *disk;
-	struct request_queue *qtarget, *qdev = qdisk->queue;
+	struct request_queue *qqueue = qdisk->queue;
+	struct nvm_dev *qnvm = qqueue->nvm;
+	struct request_queue *tqueue;
+	struct gendisk *tdisk;
 	struct nvm_target_type *tt;
-	void *target;
+	struct nvm_target *t;
+	void *targetdata;
 
 	tt = nvm_find_target_type(ttname);
 	if (!tt) {
@@ -543,42 +538,72 @@ static int nvm_create_disk(struct gendisk *qdisk, char *ttname, char *devname,
 		return -EINVAL;
 	}
 
-	qtarget = blk_alloc_queue_node(GFP_KERNEL, qdev->node);
-	if (!qtarget)
+	t = kmalloc(sizeof(struct nvm_target), GFP_KERNEL);
+	if (!t)
 		return -ENOMEM;
-	blk_queue_make_request(qtarget, tt->make_rq);
 
-	target = tt->init(qdev, qtarget, qdisk, lun_begin, lun_end);
-	if (IS_ERR(target)) {
-		blk_cleanup_queue(qtarget);
-		return -ENOMEM;
-	}
+	tqueue = blk_alloc_queue_node(GFP_KERNEL, qqueue->node);
+	if (!tqueue)
+		goto err_t;
+	blk_queue_make_request(tqueue, tt->make_rq);
 
-	disk = alloc_disk(0);
-	if (!disk) {
-		tt->exit(target);
-		blk_cleanup_queue(qtarget);
-		return -ENOMEM;
-	}
+	targetdata = tt->init(qqueue, tqueue, qdisk, lun_begin, lun_end);
+	if (IS_ERR(targetdata))
+		goto err_queue;
 
-	qtarget->queuedata = target;
+	tdisk = alloc_disk(0);
+	if (!tdisk)
+		goto err_init;
 
-	blk_queue_prep_rq(qdev, tt->prep_rq);
-	blk_queue_unprep_rq(qdev, tt->unprep_rq);
+	tqueue->queuedata = targetdata;
 
-	sprintf(disk->disk_name, "%s", devname);
-	disk->flags = GENHD_FL_EXT_DEVT;
-	disk->major = 0;
-	disk->first_minor = 0;
-	disk->fops = &nvm_fops;
-	disk->private_data = target;
-	disk->queue = qtarget;
+	blk_queue_prep_rq(qqueue, tt->prep_rq);
+	blk_queue_unprep_rq(qqueue, tt->unprep_rq);
 
-	set_capacity(disk, tt->capacity(target));
+	sprintf(tdisk->disk_name, "%s", devname);
+	tdisk->flags = GENHD_FL_EXT_DEVT;
+	tdisk->major = 0;
+	tdisk->first_minor = 0;
+	tdisk->fops = &nvm_fops;
+	tdisk->private_data = targetdata;
+	tdisk->queue = tqueue;
 
-	add_disk(disk);
+	set_capacity(tdisk, tt->capacity(targetdata));
+	add_disk(tdisk);
+
+	t->type = tt;
+	t->disk = tdisk;
+
+	down_write(&_lock);
+	list_add_tail(&t->list, &qnvm->online_targets);
+	up_write(&_lock);
 
 	return 0;
+err_init:
+	tt->exit(targetdata);
+err_queue:
+	blk_cleanup_queue(tqueue);
+err_t:
+	kfree(t);
+	return -ENOMEM;
+}
+
+/* _lock must be taken */
+static void nvm_remove_target(struct nvm_target *t)
+{
+	struct nvm_target_type *tt = t->type;
+	struct gendisk *tdisk = t->disk;
+	struct request_queue *q = tdisk->queue;
+
+	del_gendisk(tdisk);
+	if (tt->exit)
+		tt->exit(tdisk->private_data);
+	blk_cleanup_queue(q);
+
+	put_disk(tdisk);
+
+	list_del(&t->list);
+	kfree(t);
 }
 
 static ssize_t free_blocks_show(struct device *d, struct device_attribute *attr,
@@ -622,18 +647,54 @@ static ssize_t configure_store(struct device *d, struct device_attribute *attr,
 		return -EINVAL;
 	}
 
-	ret = nvm_create_disk(disk, name, ttname, lun_begin, lun_end);
+	ret = nvm_create_target(disk, name, ttname, lun_begin, lun_end);
 	if (ret)
 		pr_err("nvm: configure disk failed\n");
 
 	return cnt;
 }
-
 DEVICE_ATTR_WO(configure);
+
+static ssize_t remove_store(struct device *d, struct device_attribute *attr,
+						const char *buf, size_t cnt)
+{
+	struct gendisk *disk = dev_to_disk(d);
+	struct nvm_dev *dev = disk->queue->nvm;
+	struct nvm_target *t = NULL;
+	char tname[255];
+	int ret;
+
+	if (cnt >= 255)
+		return -EINVAL;
+
+	ret = sscanf(buf, "%s", tname);
+	if (ret != 1) {
+		pr_err("nvm: remove use the following format \"targetname\".\n");
+		return -EINVAL;
+	}
+
+	down_write(&_lock);
+	list_for_each_entry(t, &dev->online_targets, list) {
+		if (!strcmp(tname, t->disk->disk_name)) {
+			nvm_remove_target(t);
+			ret = 0;
+			break;
+		}
+	}
+	up_write(&_lock);
+
+	if (ret)
+		pr_err("nvm: target \"%s\" doesn't exist.\n", tname);
+
+	return cnt;
+}
+
+DEVICE_ATTR_WO(remove);
 
 static struct attribute *nvm_attrs[] = {
 	&dev_attr_free_blocks.attr,
 	&dev_attr_configure.attr,
+	&dev_attr_remove.attr,
 	NULL,
 };
 

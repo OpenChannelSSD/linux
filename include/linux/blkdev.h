@@ -1695,6 +1695,10 @@ struct nvm_dev {
 	struct nvm_dev_ops *ops;
 	struct request_queue *q;
 
+	struct nvm_id identity;
+
+	struct list_head online_targets;
+
 	/* Open-channel SSD stores extra data after the private driver data */
 	unsigned int drv_cmd_size;
 
@@ -1710,8 +1714,8 @@ struct nvm_dev {
 	unsigned long nr_pages;
 	unsigned long total_blocks;
 
-	struct nvm_id identity;
 	uint32_t sector_size;
+
 };
 
 /* Logical to physical mapping */
