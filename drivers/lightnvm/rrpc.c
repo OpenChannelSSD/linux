@@ -228,6 +228,7 @@ static int rrpc_move_valid_pages(struct rrpc *rrpc, struct nvm_block *block)
 		bio->bi_rw |= (READ | REQ_NVM_NO_INFLIGHT);
 		bio->bi_private = &wait;
 		bio->bi_end_io = rrpc_end_sync_bio;
+		bio->bi_nvm = &rrpc->payload;
 
 		/* TODO: may fail when EXP_PG_SIZE > PAGE_SIZE */
 		bio_add_pc_page(q, bio, page, EXPOSED_PAGE_SIZE, 0);
@@ -244,6 +245,7 @@ static int rrpc_move_valid_pages(struct rrpc *rrpc, struct nvm_block *block)
 		bio->bi_rw |= (WRITE | REQ_NVM_NO_INFLIGHT);
 		bio->bi_private = &wait;
 		bio->bi_end_io = rrpc_end_sync_bio;
+		bio->bi_nvm = &rrpc->payload;
 		/* TODO: may fail when EXP_PG_SIZE > PAGE_SIZE */
 		bio_add_pc_page(q, bio, page, EXPOSED_PAGE_SIZE, 0);
 
@@ -565,11 +567,6 @@ static void __rrpc_unprep_rq(struct rrpc *rrpc, struct request *rq)
 	}
 
 gcb_fail:
-	/* all submitted requests allocate their own addr,
-	 * except GC reads */
-	if (rq->cmd_flags & REQ_NVM_NO_INFLIGHT)
-		return;
-
 	mempool_free(pb->addr, rrpc->addr_pool);
 }
 
@@ -584,10 +581,8 @@ static void rrpc_unprep_rq(struct request_queue *q, struct request *rq)
 
 	rrpc = container_of(bio->bi_nvm, struct rrpc, payload);
 
-	if (rq->cmd_flags & REQ_NVM_MAPPED) {
+	if (rq->cmd_flags & REQ_NVM_MAPPED)
 		__rrpc_unprep_rq(rrpc, rq);
-		BUG_ON(rq->cmd_flags & REQ_NVM_NO_INFLIGHT);
-	}
 }
 
 /* lookup the primary translation table. If there isn't an associated block to
@@ -898,17 +893,17 @@ static int rrpc_core_init(struct rrpc *rrpc)
 
 static void rrpc_core_free(struct rrpc *rrpc)
 {
+	if (rrpc->addr_pool)
+		mempool_destroy(rrpc->addr_pool);
+	if (rrpc->page_pool)
+		mempool_destroy(rrpc->page_pool);
+
 	down_write(&_lock);
 	if (_addr_cache)
 		kmem_cache_destroy(_addr_cache);
 	if (_gcb_cache)
 		kmem_cache_destroy(_gcb_cache);
 	up_write(&_lock);
-
-	if (rrpc->addr_pool)
-		mempool_destroy(rrpc->addr_pool);
-	if (rrpc->page_pool)
-		mempool_destroy(rrpc->page_pool);
 }
 
 static void rrpc_luns_free(struct rrpc *rrpc)
