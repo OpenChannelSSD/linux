@@ -521,7 +521,7 @@ static const struct block_device_operations nvm_fops = {
 	.release	= nvm_release,
 };
 
-static int nvm_create_target(struct gendisk *qdisk, char *ttname, char *devname,
+static int nvm_create_target(struct gendisk *qdisk, char *ttname, char *tname,
 						int lun_begin, int lun_end)
 {
 	struct request_queue *qqueue = qdisk->queue;
@@ -537,6 +537,16 @@ static int nvm_create_target(struct gendisk *qdisk, char *ttname, char *devname,
 		pr_err("nvm: target type %s not found\n", ttname);
 		return -EINVAL;
 	}
+
+	down_write(&_lock);
+	list_for_each_entry(t, &qnvm->online_targets, list) {
+		if (!strcmp(tname, t->disk->disk_name)) {
+			pr_err("nvm: target name already exists.\n");
+			up_write(&_lock);
+			return -EINVAL;
+		}
+	}
+	up_write(&_lock);
 
 	t = kmalloc(sizeof(struct nvm_target), GFP_KERNEL);
 	if (!t)
@@ -560,7 +570,7 @@ static int nvm_create_target(struct gendisk *qdisk, char *ttname, char *devname,
 	blk_queue_prep_rq(qqueue, tt->prep_rq);
 	blk_queue_unprep_rq(qqueue, tt->unprep_rq);
 
-	sprintf(tdisk->disk_name, "%s", devname);
+	sprintf(tdisk->disk_name, "%s", tname);
 	tdisk->flags = GENHD_FL_EXT_DEVT;
 	tdisk->major = 0;
 	tdisk->first_minor = 0;
