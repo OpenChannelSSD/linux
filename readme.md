@@ -33,13 +33,9 @@ null_blk driver is for performance testing, while the NVMe driver can be
 initialized using a patches version of Keith Busch's QEMU NVMe simulator, or if
 real hardware is available.
 
-The QEMU branch is available at:
+The QEMU branch is available at: https://github.com/OpenChannelSSD/qemu-nvme
 
-    https://github.com/OpenChannelSSD/qemu-nvme
-
-Follow the guide at
-
-    https://github.com/OpenChannelSSD/linux/wiki
+Follow the guide at: https://github.com/OpenChannelSSD/linux/wiki
 
 # Available Hardware
 
