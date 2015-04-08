@@ -244,11 +244,11 @@ enum nvme_opcode {
 };
 
 enum lnvme_opcode {
-	lnvm_cmd_hybrid_write	= 0xE0,
-	lnvm_cmd_hybrid_read	= 0xE1,
-	lnvm_cmd_phys_write	= 0xE2,
-	lnvm_cmd_phys_read	= 0xE3,
-	lnvm_cmd_erase_sync	= 0xE4,
+	lnvm_cmd_hybrid_write	= 0x81,
+	lnvm_cmd_hybrid_read	= 0x02,
+	lnvm_cmd_phys_write	= 0x91,
+	lnvm_cmd_phys_read	= 0x92,
+	lnvm_cmd_erase_sync	= 0x90,
 };
 
 struct nvme_common_command {
@@ -387,10 +387,12 @@ enum nvme_admin_opcode {
 	nvme_admin_security_send	= 0x81,
 	nvme_admin_security_recv	= 0x82,
 
-	lnvm_admin_identify		= 0xF0,
-	lnvm_admin_get_features		= 0xF1,
-	lnvm_admin_set_responsibility	= 0xF2,
-	lnvm_admin_get_l2p_tbl		= 0xF3,
+	lnvm_admin_identify		= 0xe2,
+	lnvm_admin_get_features		= 0xe6,
+	lnvm_admin_set_responsibility	= 0xe5,
+	lnvm_admin_get_l2p_tbl		= 0xea,
+	lnvm_admin_get_bb_tbl		= 0xf2,
+	lnvm_admin_set_bb_tbl		= 0xf1,
 };
 
 enum {
