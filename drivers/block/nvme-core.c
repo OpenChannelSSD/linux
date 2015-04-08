@@ -1096,6 +1096,21 @@ int nvme_nvm_get_l2p_tbl_cmd(struct nvme_dev *dev, unsigned nsid, u64 slba,
 	return nvme_submit_admin_cmd(dev, &c, NULL);
 }
 
+int nvme_nvm_erase_block_cmd(struct nvme_dev *dev, struct nvme_ns *ns,
+						sector_t block_id)
+{
+	struct nvme_command c;
+	int nsid = ns->ns_id;
+	int res;
+
+	memset(&c, 0, sizeof(c));
+	c.common.opcode = lnvm_cmd_erase_sync;
+	c.common.nsid = cpu_to_le32(nsid);
+	c.lnvm_erase.blk_addr = cpu_to_le64(block_id);
+
+	return nvme_submit_io_cmd(dev, ns, &c, &res);
+}
+
 int nvme_identify(struct nvme_dev *dev, unsigned nsid, unsigned cns,
 							dma_addr_t dma_addr)
 {
@@ -1678,6 +1693,14 @@ out:
 	return res;
 }
 
+static int nvme_nvm_erase_block(struct request_queue *q, sector_t block_id)
+{
+	struct nvme_ns *ns = q->queuedata;
+	struct nvme_dev *dev = ns->dev;
+
+	return nvme_nvm_erase_block_cmd(dev, ns, block_id);
+}
+
 static struct blk_mq_ops nvme_mq_admin_ops = {
 	.queue_rq	= nvme_admin_queue_rq,
 	.map_queue	= blk_mq_map_queue,
@@ -1692,6 +1715,7 @@ static struct nvm_dev_ops nvme_nvm_dev_ops = {
 	.get_features		= nvme_nvm_get_features,
 	.set_responsibility	= nvme_nvm_set_responsibility,
 	.get_l2p_tbl		= nvme_nvm_get_l2p_tbl,
+	.erase_block		= nvme_nvm_erase_block,
 };
 
 static struct blk_mq_ops nvme_mq_ops = {

@@ -323,6 +323,18 @@ struct nvme_lnvm_set_resp_command {
 	__u32			rsvd11[4];
 };
 
+struct nvme_lnvm_erase_block {
+	__u8			opcode;
+	__u8			flags;
+	__u16			command_id;
+	__le32			nsid;
+	__u64			rsvd[2];
+	__le64			prp1;
+	__le64			prp2;
+	__le64			blk_addr;
+	__u32			rsvd11[4];
+};
+
 enum {
 	NVME_RW_LR			= 1 << 15,
 	NVME_RW_FUA			= 1 << 14,
@@ -551,6 +563,7 @@ struct nvme_command {
 		struct nvme_lnvm_rw_command lnvm_rw;
 		struct nvme_lnvm_l2ptbl_command lnvm_l2p;
 		struct nvme_lnvm_set_resp_command lnvm_resp;
+		struct nvme_lnvm_erase_block lnvm_erase;
 	};
 };
 
