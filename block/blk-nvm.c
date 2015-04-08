@@ -269,6 +269,7 @@ static int nvm_block_map(u64 slba, u64 nlb, u64 *entries, void *private)
 			 * block state */
 			list_move_tail(&blk->list, &lun->used_list);
 			blk->type = 1;
+			lun->nr_free_blocks--;
 		}
 	}
 
