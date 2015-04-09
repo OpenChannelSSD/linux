@@ -499,29 +499,6 @@ void blk_nvm_unregister(struct request_queue *q)
 	nvm_exit(q->nvm);
 }
 
-static int nvm_ioctl(struct block_device *bdev, fmode_t mode, unsigned int cmd,
-							unsigned long arg)
-{
-	return 0;
-}
-
-static int nvm_open(struct block_device *bdev, fmode_t mode)
-{
-	return 0;
-}
-
-static void nvm_release(struct gendisk *disk, fmode_t mode)
-{
-	return;
-}
-
-static const struct block_device_operations nvm_fops = {
-	.owner		= THIS_MODULE,
-	.ioctl		= nvm_ioctl,
-	.open		= nvm_open,
-	.release	= nvm_release,
-};
-
 static int nvm_create_target(struct gendisk *qdisk, char *ttname, char *tname,
 						int lun_begin, int lun_end)
 {
@@ -575,7 +552,7 @@ static int nvm_create_target(struct gendisk *qdisk, char *ttname, char *tname,
 	tdisk->flags = GENHD_FL_EXT_DEVT;
 	tdisk->major = 0;
 	tdisk->first_minor = 0;
-	tdisk->fops = &nvm_fops;
+        tdisk->fops = qdisk->fops;
 	tdisk->private_data = targetdata;
 	tdisk->queue = tqueue;
 
