@@ -267,7 +267,8 @@ int nvm_set_rqd_ppalist(struct nvm_dev *dev, struct nvm_rq *rqd,
 		for (i = 0; i < nr_ppas; i++) {
 			for (pl_idx = 0; pl_idx < plane_cnt; pl_idx++) {
 				ppas[i].g.pl = pl_idx;
-				rqd->ppa_list[(pl_idx * nr_ppas) + i] = ppas[i];
+				rqd->ppa_list[(plane_cnt * i) + pl_idx] =
+									ppas[i];
 			}
 		}
 	}
