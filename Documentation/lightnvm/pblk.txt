@@ -1,0 +1,318 @@
+================================================================================
+pblk: Physical Block Device Target
+================================================================================
+
+pblk is a LightNVM target implementing a full host-side Flash Translation Layer
+(FTL). As a target, pblk presents itself as a make_request_fn base driver to the
+block layer. Specifically, as a block device driver, exposing the Open-Channel
+SSD storage device as block storage to user space.
+
+The primary task of pblk is thus to translate logical block addresses (LBAs),
+safely and efficiently, to physical page addresses (PPAs) under the constraints
+imposed by SSD controllers and media.
+
+Regarding functionality, pblk implements everything related to data placement,
+garbage collection (GC) and recovery. By design, pblk supports pluggable mapping
+and GC algorithms. A single hardware device can thereby accommodate specific
+workloads by making changes in software to the desired module (e.g., to the data
+stripping strategy in charge of mapping logical to physical addresses).
+
+In its current state, pblk implements the following functionality:
+
+  1. Sector-based host-side translation table management
+  2. Write buffering for writing to physical flash pages
+  3. Provisioning
+  4. Translation table recovery on power outage
+  5. Retire bad flash blocks on write failure
+  6. Simple cost-based garbage collector (GC)
+  7. Sysfs integration
+  8. I/O rate-limiting ??
+
+To access the physical flash pblk makes use of LightNVM's general media manager,
+which exposes a get/put block provisioning interface. Wear leveling is an
+integral part of the media manager and not a responsibility of pblk.
+
+
+1. Sector-based host-side translation table management
+======================================================
+
+Mapping Strategy
+----------------
+
+In pblk, we follow a late-mapping approach. This means that for incoming I/Os,
+LBAs are not immediately mapped to its PPA. Instead, the mapping occurs when
+data is going to be written to the media. This allows us to (i) enable user
+I/O rating without breaking the actual mapping strategy; (ii) simplify requeues;
+and (iii) use the same mapping for user I/O and garbage collection. As we will
+described in Section 1.2, data is written to a write buffer to start with.
+Mapping occurs on the write thread moving date from the buffer to the media.
+
+In terms of the actual mapping strategy, pblk's simplest version is based on
+round robin. Here, data is stripped across all active LUNs in the target
+instance for each 4KB of data. In the event of unbalanced LUN usage due to GC
+(Section 6), we prioritize less used LUNs. Note that wear-leveling is the media
+manager's responsibility; pblk uses the get block interface for provisioning by
+specifying the LUN that the new block should come from. The actual block is
+chosen by the media manager.
+
+Since data placement is entirely implemented in the host, pblk allows for other
+mapping strategies. This enables mapping optimizations for different workloads.
+
+
+2. Write Buffer
+===============
+
+pblk uses a ring write buffer of size N, where N is the power of two closest to
+the product of the number of active LUNS and the flash block size.
+
+Buffering facilitates sending writes to the controller in the size of and
+aligned to a given flash page size. A useful facility since constraints by
+controllers include writing aligned and at page granularity. Typically, flash
+pages are between 16KB and 32KB large, and the controller might introduce other
+abstractions that tie pages together (e.g., planes) and make the "apparent"
+page size relatively large (e.g., 64KB, 128KB).
+
+The flash media introduces additional constraints. Example, for a write to be
+guaranteed persistence on MLC flash, then it must be written in page pairs
+(lower and upper pages). Consequentially, the data in the lower flash page
+cannot be read safely until a write to the upper flash page occurs.
+Also, different types of media might require that, to safely read data once
+it is written to the media, a certain number of flash pages must be written to
+the same block. In MLC memories available today, this number is around eight
+pages. The consequence of these media restrictions is that data must thus
+remain cached in the host until media constraints can be satisfied.
+
+We refer to the number of sectors that must reside in the write buffer before
+it is safe to read from the media as the buffers "grace area". We describe
+below how we implement this grace area through a dedicated pointer in the
+write buffer. Note that this problem only aggravates with more complex media
+such as TLC or QLC.
+
+Buffering writes are thus a means to meet both controller- and media-specific
+constraints.
+
+Ring Write Buffer Design
+------------------------
+
+pblk's ring buffer is implemented as a ring buffer
+(See Documentation/circular-buffers.txt). However, the responsibilities of the
+producer and the consumer are split up into two extra pointers. These pointers
+allow implementing the grace area mentioned above.
+With regards to locking, the buffer can be filled and emptied at the same time,
+but both producers and consumers are serialized. We describe each pointer
+separately:
+
+  - Memory Pointer (mem): The head pointer (producer). It points to the
+    next writable entry in the buffer.
+
+  - Submission Pointer (subm): The tail pointer (consumer). It points
+    to the next buffered entry that is ready to be submitted to the media.
+    The buffer count (number of valid elements in the buffer) is calculated
+    using mem and subm.
+
+  - Sync Pointer (sync): It signals the last submitted entry that has
+    completed; i.e., that has successfully been persisted to the media. It acts
+    as a back pointer that guarantees that I/Os are completed in order. This is
+    necessary to guarantee that flushes are completed correctly.
+    (See Documentation/block/writeback_cache_control.txt). The buffer space
+    (number of free entries in the buffer) is calculated between mem and sync.
+
+  - Flush Pointer (flush): It guarantees that flushes are respected by
+    signaling the last entry associated with a REQ_FLUSH request.
+    This pointer is taken into consideration by the write thread consuming the
+    buffer (subm); if this pointer is present, the write thread TODO: the write
+    thread is what?
+
+  - Mapping Update Pointer (l2p_update): It guarantees that L2P lookups for
+    entries that still reside in the write buffer cache will point to it, even
+    if they have successfully been persisted to the media. By doing this we
+    guarantee that all entries residing in the write buffer will be read from
+    cache, thus preventing I/Os to be sent to the device to retrieve
+    half-written flash pages. This way, we ensure that the whole buffer defines
+    a grace area; the mapping table is only updated when the buffer head wraps
+    up.
+
+The write buffer is complemented with a write context buffer, which stores
+metadata for each 4KB write. As described in Section 1, we follow a late-map
+approach, where the actual mapping to flash pages is done when the write buffer
+is being persisted to the media. This allows us to decouple the mapping strategy
+from buffer writes, thus enabling mapping optimizations for different workloads.
+
+To minimize calculations, pblk's write buffer must be of a power-of-2 size...
+also write that it is the closes one to the number of active LUNs in the target
+X the size of a flash block.
+
+          mem     l2p_update       sync                        subm
+           |          |             |                            |
+ -------------------------------------------------------------------------------
+|          |          |   synced    |          submitted                       |
+-------------------------------------------------------------------------------
+| CCCCCCCC | DDDDDDD  | CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC|
+ -------------------------------------------------------------------------------
+
+C: L2P points to cache
+D: L2P points to device
+
+Write Path
+----------
+
+On a new write, the bio associated to it is converted into a write context
+(pblk_w_ctx), where the logical block address (LBA), length and flush
+requirements are stored. The bio data is copied to the internal write buffer and
+completed if a flush is not required (in case of a flush, the bio is completed
+after all data in the write buffer has been persisted to the media). As data is
+stored in the write buffer, the translation table is updated so that LBAs point
+to the buffer entries data has been stored in.
+
+A separate write thread consumes user data from the write buffer and forms new
+bios that are then sent to the device. The mapping strategy described in Section
+1 takes place here. This strategy can be modified, as long as controller
+constrains are considered. If a flush is required, but there is not enough data
+in the write buffer to fulfill these constrains, padding is performed. If the
+write succeeds, the sync pointer will be updated on the completion path. When
+the head pointer (mem) wraps up and overwrites old data, the l2p_update pointer
+takes care of updating the translation table so that future lookups will point
+to physical addresses on the device. As mentioned, this late mapping to device
+addresses is the mechanism that we use to guarantee the buffer's grace area.
+
+Note that writes might fail. Look at Section 4 for an explanation on how to deal
+with this case.
+
+Read Path
+---------
+
+The read path is simpler than the write path. For each 4KB sector on the read
+bio, a lookup is performed to find if data is cached in the write buffer or if
+it is necessary to submit an I/O to retrieve it from the physical flash. It
+might happen that only some sectors reside in cache. In this case, a new bio is
+issue to retrieve sectors from the media, and the original bio is filled out
+manually with them.
+
+Note that pblk does not guarantee ordering. This means that in the followind
+pattern:
+
+	WRITE LBA 0 with X
+	WRITE LBA 1 with X
+	WRITE LBA 0 with Y
+	READ LBA 0
+
+it is possible that the result of the last read is X. In order to guarantee that
+the result is Y, a sync must be issued from user space. This will produce the
+following pattern:
+
+	WRITE LBA 0 with X
+	WRITE LBA 1 with X
+	WRITE LBA 0 with Y
+	REQ_FLUSH
+	READ LBA 0
+
+
+3. Provisioning
+================
+
+As of today, LightNVM delegates block erases to the target. As a consequence,
+when a target gets a new block, an erase is performed. If this operation takes
+place during LBA - PPA mapping on the write thread, latency spikes will occur.
+
+Note that programming a flash page (write) takes around 1ms in conventional
+NAND. If dual or quad plane programming is supported by the controller, then up
+to 4 pages can be programmed in 1ms. On the other hand, erases take around 2-5
+ms and might vary; an erase on a specific LUN might take up to 10ms.
+
+In order to provide more predictable write latencies, we separated the
+provisioning of new blocks from the write thread. The target will pre-allocate a
+configurable number of blocks per active LUN and put them on a list, which is
+available to the write thread. The queue depth of that list can adapt to the
+pressure experienced by the provisioning thread.
+
+In the future, we might delegate block erase to the media manager, thus
+simplifying target provisioning.
+
+
+4. Translation table recovery
+=============================
+
+The L2P translation table is maintained entirely in host memory. The ratio
+is approximately 1GB of L2P per 1TB of flash. Translation table recovery is
+considered for two scenarios:
+
+ (1) Graceful system shutdown (WIP)
+ (2) Power failure
+
+In the case of a graceful system shutdown, a L2P snapshot is stored on media
+
+When an L2P snapshot is not recoverable from media then pblk assumes that an
+unexpected system shutdown, such as a power failure, has occurred.
+In which case, pblk resorts to scanning the media and thereby reconstruct the
+table. Two levels of redundancy are maintained to facilitate reconstruction:
+
+ Firstly, for each 4KB sector, the LBA to physical page address (PPA) mapping
+ is stored in the out-of-bound (OOB) area for that sector.
+
+ Secondly, when a block is closed, the last page contains metadata on the block
+ itself, including the LBA - PPA mapping list, block status and counters.
+
+All recovery methods leverage functionality of the generic media manager... TODO
+
+
+5. Write Recovery
+=================
+
+When writing to a flash page, the flash programming might fail. Programming
+failure can occur either because the page or the entire block grew bad. When
+programming fails, we follow a 3-step recovery process:
+
+ (1) The 64-bit result field of the nvme command is checked to find which PPAs
+ failed. The block(s) corresponding with the failed PPAs are marked as bad
+ blocks. As blocks are marked bad, they are retired and no new LBAs will be
+ mapped to them. After this, all entries before the first error can be
+ completed. A new nvme command is issued with the remaining PPAs and immediately
+ send to the media.
+ This is necessary since the back pointer in the write buffer (sync) will be
+ waiting for buffer entries to be completed in order. This step will only take
+ place once per grown bad block; (2) and (3) will take care of recovering the
+ rest of the block.
+
+ (2) Even though the failed write will trigger the associated block to be marked
+ as bad, mappings to that block might have occurred before the command was
+ completed. To avoid paralyzing the write buffer when cleaning these entries, we
+ allow them to be submitted. Chances are that writes to a bad block will fail.
+ If so, we complete the entries before the failed PPA and resubmit the entries
+ that are mapped to a non-bad block. The l2p pointer in the write buffer takes
+ care of re-buffering entries associated with a bad block.
+ Note that the back pointer guarantees that the l2p pointer will not miss any
+ mappings. If writes to the bad block succeed, they will be recovered by (3).
+
+ (3) Finally, all pages that have successfully been mapped to a bad block are
+ garbage collected. See Garbage Collection (Section 6).
+
+
+6. Garbage Collection
+=====================
+
+As a LightNVM target implementing a block device FTL, garbage collection is
+required. This is because LBA - PPA mapping is purely based on incoming user
+I/Os, not on data type, hotness, or any other characteristic that would allow to
+map flash blocks to application data structures.
+
+pblk implements a simple cost-based garbage collection algorithm. When the
+number of free blocks on the LUN go below a certain threshold, GC kicks off: it
+selects a victim block based on the invalid page counter and it moves all valid
+sectors back on the write buffer to be assigned a new PPA. The victim block is
+then put back to the media manager.
+
+In the beginning, GC has no preference over user I/Os; both compete for the
+write buffer. However, as less blocks become available, the GC rate-limits user
+I/O to guarantee that it will have enough blocks. An extreme is that the GC
+enters in an emergency mode. In this case, user I/O is stopped until a certain
+number of free blocks are available to the target again.
+
+OVERPROVISIONING??
+
+7. Sysfs integration
+====================
+
+
+8. I/O rate-limiting ??
+====================
+
