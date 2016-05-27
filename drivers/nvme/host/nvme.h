@@ -18,6 +18,7 @@
 #include <linux/pci.h>
 #include <linux/kref.h>
 #include <linux/blk-mq.h>
+#include <linux/lightnvm.h>
 
 enum {
 	/*
@@ -122,6 +123,7 @@ struct nvme_ns {
 	struct nvme_ctrl *ctrl;
 	struct request_queue *queue;
 	struct gendisk *disk;
+	struct nvm_dev *ndev;
 	struct kref kref;
 	int instance;
 
@@ -133,7 +135,6 @@ struct nvme_ns {
 	u16 ms;
 	bool ext;
 	u8 pi_type;
-	int type;
 	unsigned long flags;
 
 #define NVME_NS_REMOVING 0
@@ -269,12 +270,13 @@ int nvme_nvm_ns_supported(struct nvme_ns *ns, struct nvme_id_ns *id);
 int nvme_nvm_register(struct request_queue *q, char *disk_name);
 void nvme_nvm_unregister(struct request_queue *q, char *disk_name);
 #else
-static inline int nvme_nvm_register(struct request_queue *q, char *disk_name)
+static inline int nvme_nvm_register(struct nvme_ns *ns, char *disk_name,
+								int node)
 {
 	return 0;
 }
 
-static inline void nvme_nvm_unregister(struct request_queue *q, char *disk_name) {};
+static inline void nvme_nvm_unregister(struct nvme_ns *ns) {};
 
 static inline int nvme_nvm_ns_supported(struct nvme_ns *ns, struct nvme_id_ns *id)
 {

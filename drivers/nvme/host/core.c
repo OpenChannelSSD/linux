@@ -137,12 +137,14 @@ static void nvme_free_ns(struct kref *kref)
 {
 	struct nvme_ns *ns = container_of(kref, struct nvme_ns, kref);
 
-	if (ns->type == NVME_NS_LIGHTNVM)
-		nvme_nvm_unregister(ns->queue, ns->disk->disk_name);
+	if (ns->ndev)
+		nvme_nvm_unregister(ns);
 
-	spin_lock(&dev_list_lock);
-	ns->disk->private_data = NULL;
-	spin_unlock(&dev_list_lock);
+	if (ns->disk) {
+		spin_lock(&dev_list_lock);
+		ns->disk->private_data = NULL;
+		spin_unlock(&dev_list_lock);
+	}
 
 	put_disk(ns->disk);
 	ida_simple_remove(&ns->ctrl->ns_ida, ns->instance);
@@ -788,8 +790,7 @@ static void nvme_config_discard(struct nvme_ns *ns)
 static int nvme_revalidate_ns(struct nvme_ns *ns, struct nvme_id_ns **id)
 {
 	if (nvme_identify_ns(ns->ctrl, ns->ns_id, id)) {
-		dev_warn(disk_to_dev(ns->disk), "%s: Identify failure\n",
-				__func__);
+		dev_warn(ns->ctrl->dev, "%s: Identify failure\n", __func__);
 		return -ENODEV;
 	}
 
@@ -1473,18 +1474,11 @@ static void nvme_alloc_ns(struct nvme_ctrl *ctrl, unsigned nsid)
 	sprintf(disk_name, "nvme%dn%d", ctrl->instance, ns->instance);
 
 	if (nvme_nvm_ns_supported(ns, id)) {
-		if (nvme_nvm_register(ns->queue, disk_name)) {
-			dev_warn(ctrl->dev,
-				"%s: LightNVM init failure\n", __func__);
+		if (nvme_nvm_register(ns, disk_name, node)) {
+			dev_warn(ctrl->dev, "%s: LightNVM init failure\n",
+								__func__);
 			goto out_free_id;
 		}
-
-		disk = alloc_disk_node(0, node);
-		if (!disk)
-			goto out_free_id;
-		memcpy(disk->disk_name, disk_name, DISK_NAME_LEN);
-		ns->disk = disk;
-		ns->type = NVME_NS_LIGHTNVM;
 	} else {
 		disk = alloc_disk_node(0, node);
 		if (!disk)
@@ -1532,7 +1526,7 @@ static void nvme_ns_remove(struct nvme_ns *ns)
 	if (test_and_set_bit(NVME_NS_REMOVING, &ns->flags))
 		return;
 
-	if (ns->disk->flags & GENHD_FL_UP) {
+	if (ns->disk && ns->disk->flags & GENHD_FL_UP) {
 		if (blk_get_integrity(ns->disk))
 			blk_integrity_unregister(ns->disk);
 		sysfs_remove_group(&disk_to_dev(ns->disk)->kobj,
@@ -1552,7 +1546,7 @@ static void nvme_validate_ns(struct nvme_ctrl *ctrl, unsigned nsid)
 
 	ns = nvme_find_ns(ctrl, nsid);
 	if (ns) {
-		if (revalidate_disk(ns->disk))
+		if (ns->disk && revalidate_disk(ns->disk))
 			nvme_ns_remove(ns);
 	} else
 		nvme_alloc_ns(ctrl, nsid);
@@ -1856,7 +1850,7 @@ void nvme_kill_queues(struct nvme_ctrl *ctrl)
 		 * Revalidating a dead namespace sets capacity to 0. This will
 		 * end buffered writers dirtying pages that can't be synced.
 		 */
-		if (!test_and_set_bit(NVME_NS_DEAD, &ns->flags))
+		if (ns->disk && !test_and_set_bit(NVME_NS_DEAD, &ns->flags))
 			revalidate_disk(ns->disk);
 
 		blk_set_queue_dying(ns->queue);
