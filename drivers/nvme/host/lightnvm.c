@@ -592,10 +592,12 @@ static struct nvm_dev_ops nvme_nvm_dev_ops = {
 	.max_phys_sect		= 64,
 };
 
-int nvme_nvm_register(struct nvme_ns *ns, char *disk_name, int node)
+int nvme_nvm_register(struct nvme_ns *ns, char *disk_name, int node,
+		      const struct attribute_group *attrs)
 {
 	struct request_queue *q = ns->queue;
 	struct nvm_dev *dev;
+	int ret;
 
 	dev = nvm_alloc_dev(node);
 	if (!dev)
@@ -604,6 +606,8 @@ int nvme_nvm_register(struct nvme_ns *ns, char *disk_name, int node)
 	dev->q = q;
 	memcpy(dev->name, disk_name, DISK_NAME_LEN);
 	dev->ops = &nvme_nvm_dev_ops;
+	dev->parent_dev = ns->ctrl->device;
+	dev->private_data = ns;
 	ns->ndev = dev;
 
 	ret = nvm_register(dev);
