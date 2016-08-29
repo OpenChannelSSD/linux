@@ -494,6 +494,7 @@ extern int nvm_dev_factory(struct nvm_dev *, int flags);
 
 extern void nvm_part_to_tgt(struct nvm_dev *, sector_t *, int);
 
+extern void nvm_check_write_cmd_correct(void *cmd);
 #else /* CONFIG_NVM */
 struct nvm_dev_ops;
 
