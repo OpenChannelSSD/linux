@@ -122,6 +122,23 @@ struct nvm_ioctl_dev_factory {
 	__u32 flags;
 };
 
+struct nvm_user_vio
+{
+	__u8 opcode;
+	__u8 flags;
+	__u16 control;
+	__u16 nppas;
+	__u16 rsvd;
+	__u64 metadata;
+	__u64 addr;
+	__u64 ppas;
+	__u32 metadata_len;
+	__u32 data_len;
+	__u64 status;
+	__u32 result;
+	__u32 rsvd3[3];
+};
+
 /* The ioctl type, 'L', 0x20 - 0x2F documented in ioctl-number.txt */
 enum {
 	/* top level cmds */
@@ -137,6 +154,9 @@ enum {
 
 	/* Factory reset device */
 	NVM_DEV_FACTORY_CMD,
+
+	/* Vector user I/O */
+	NVM_DEV_VIO_CMD = 0x40,
 };
 
 #define NVM_IOCTL 'L' /* 0x4c */
@@ -153,6 +173,9 @@ enum {
 						struct nvm_ioctl_dev_init)
 #define NVM_DEV_FACTORY		_IOW(NVM_IOCTL, NVM_DEV_FACTORY_CMD, \
 						struct nvm_ioctl_dev_factory)
+
+#define NVME_NVM_IOCTL_SUBMIT_VIO	_IOWR(NVM_IOCTL, NVM_DEV_VIO_CMD, \
+						struct nvm_user_vio)
 
 #define NVM_VERSION_MAJOR	1
 #define NVM_VERSION_MINOR	0

@@ -26,6 +26,8 @@
 #include <linux/bitops.h>
 #include <linux/lightnvm.h>
 #include <linux/vmalloc.h>
+#include <linux/sched/sysctl.h>
+#include <uapi/linux/lightnvm.h>
 
 enum nvme_nvm_admin_opcode {
 	nvme_nvm_admin_identity		= 0xe2,
@@ -574,6 +576,132 @@ static struct nvm_dev_ops nvme_nvm_dev_ops = {
 
 	.max_phys_sect		= 64,
 };
+
+static void nvme_nvm_end_user_vio(struct request *rq, int error)
+{
+	struct completion *waiting = rq->end_io_data;
+
+	complete(waiting);
+}
+
+static int nvme_nvm_user_vio(struct nvme_ns *ns,
+					struct nvm_user_vio __user *uvio)
+{
+	struct nvm_dev *dev = ns->ndev;
+	struct gendisk *disk = ns->disk;
+	struct nvm_user_vio vio;
+	struct request_queue *q = ns->queue;
+	struct request *rq;
+	struct nvme_nvm_command *cmd;
+	DECLARE_COMPLETION_ONSTACK(wait);
+	unsigned long hang_check;
+	struct bio *bio = NULL;
+	__le64 *ppa_list;
+	dma_addr_t ppa_dma;
+	int ret = 0;
+
+	if (copy_from_user(&vio, uvio, sizeof(vio)))
+		return -EFAULT;
+	if (vio.flags)
+		return -EINVAL;
+
+	if (vio.nppas) {
+		ppa_list = dma_pool_alloc(dev->dma_pool, GFP_KERNEL,
+								&ppa_dma);
+		if (!ppa_list)
+			return -ENOMEM;
+		if (copy_from_user(ppa_list, (void __user *)vio.ppas,
+					sizeof(u64) * (vio.nppas + 1))) {
+			ret = -EFAULT;
+			goto err_ppa_list;
+		}
+	}
+
+	cmd = kzalloc(sizeof(struct nvme_nvm_command), GFP_KERNEL);
+	if (!cmd) {
+		ret = -ENOMEM;
+		goto err_ppa_list;
+	}
+
+	rq = nvme_alloc_request(q, (struct nvme_command *)cmd, 0, NVME_QID_ANY);
+	if (IS_ERR(rq)) {
+		ret = -ENOMEM;
+		goto err_cmd;
+	}
+
+	rq->cmd_flags &= ~REQ_FAILFAST_DRIVER;
+
+	if (vio.data_len) {
+		if (blk_rq_map_user(q, rq, NULL,
+				    (void __user *)(uintptr_t)vio.addr,
+				    vio.data_len, GFP_KERNEL)) {
+			ret = -ENOMEM;
+			goto err_rq;
+		}
+		bio = rq->bio;
+
+		bio->bi_bdev = bdget_disk(disk, 0);
+		if (!bio->bi_bdev) {
+			ret = -ENODEV;
+			goto err_map;
+		}
+	}
+
+	if (!vio.nppas)
+		cmd->ph_rw.spba = cpu_to_le64(vio.ppas);
+	else
+		cmd->ph_rw.spba = cpu_to_le64(ppa_dma);
+
+	cmd->ph_rw.opcode = vio.opcode;
+	cmd->ph_rw.nsid = cpu_to_le32(ns->ns_id);
+	cmd->ph_rw.control = cpu_to_le16(vio.control);
+	cmd->ph_rw.length = cpu_to_le16(vio.nppas);
+
+	rq->end_io_data = &wait;
+
+	blk_execute_rq_nowait(q, NULL, rq, 0, nvme_nvm_end_user_vio);
+
+	/* Prevent hang_check timer from firing at us during very long I/O */
+	hang_check = sysctl_hung_task_timeout_secs;
+	if (hang_check)
+		while (!wait_for_completion_io_timeout(&wait,
+							hang_check * (HZ/2)));
+	else
+		wait_for_completion_io(&wait);
+
+	vio.status = le64_to_cpu(nvme_req(rq)->result.u64);
+	vio.result = rq->errors;
+
+	if (vio.data_len) {
+		blk_rq_unmap_user(bio);
+		bdput(bio->bi_bdev);
+	}
+
+	copy_to_user(uvio, &vio, sizeof(vio));
+err_map:
+	if (bio) {
+		bdput(bio->bi_bdev);
+		blk_rq_unmap_user(bio);
+	}
+err_rq:
+	blk_mq_free_request(rq);
+err_cmd:
+	kfree(cmd);
+err_ppa_list:
+	if (vio.nppas)
+		dma_pool_free(dev->dma_pool, ppa_list, ppa_dma);
+	return ret;
+}
+
+int nvme_nvm_ioctl(struct nvme_ns *ns, unsigned int cmd, unsigned long arg)
+{
+	switch (cmd) {
+	case NVME_NVM_IOCTL_SUBMIT_VIO:
+		return nvme_nvm_user_vio(ns, (void __user *)arg);
+	default:
+		return -ENOTTY;
+	}
+}
 
 int nvme_nvm_register(struct nvme_ns *ns, char *disk_name, int node)
 {

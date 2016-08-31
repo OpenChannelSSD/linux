@@ -792,6 +792,8 @@ static int nvme_ioctl(struct block_device *bdev, fmode_t mode,
 		return nvme_sg_io(ns, (void __user *)arg);
 #endif
 	default:
+		if (ns->ndev)
+			return nvme_nvm_ioctl(ns, cmd, arg);
 		return -ENOTTY;
 	}
 }
