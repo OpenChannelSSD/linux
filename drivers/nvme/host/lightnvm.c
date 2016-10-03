@@ -810,5 +810,12 @@ int nvme_nvm_ns_supported(struct nvme_ns *ns, struct nvme_id_ns *id)
 							id->vs[0] == 0x1)
 		return 1;
 
+	/* CNEX Labs - PCI ID + Vendor specific bit */
+	if (pdev->vendor == PCI_VENDOR_ID_CNEX &&
+				pdev->device == 0x0e01 &&
+							id->vs[0] == 0x1)
+		return 1;
+
+
 	return 0;
 }
