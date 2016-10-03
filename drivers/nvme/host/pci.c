@@ -2474,6 +2474,9 @@ static const struct pci_error_handlers nvme_err_handler = {
 	.reset_done	= nvme_reset_done,
 };
 
+/* Move to pci_ids.h later */
+#define PCI_CLASS_STORAGE_EXPRESSWL	0x010803
+
 static const struct pci_device_id nvme_id_table[] = {
 	{ PCI_VDEVICE(INTEL, 0x0953),
 		.driver_data = NVME_QUIRK_STRIPE_SIZE |
@@ -2500,6 +2503,7 @@ static const struct pci_device_id nvme_id_table[] = {
 	{ PCI_DEVICE(0x144d, 0xa822),   /* Samsung PM1725a */
 		.driver_data = NVME_QUIRK_DELAY_BEFORE_CHK_RDY, },
 	{ PCI_DEVICE_CLASS(PCI_CLASS_STORAGE_EXPRESS, 0xffffff) },
+	{ PCI_DEVICE_CLASS(PCI_CLASS_STORAGE_EXPRESSWL, 0xffffff) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_APPLE, 0x2001) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_APPLE, 0x2003) },
 	{ 0, }
