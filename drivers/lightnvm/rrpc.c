@@ -1167,11 +1167,8 @@ static int rrpc_map_init(struct rrpc *rrpc)
 		r->addr = ADDR_EMPTY;
 	}
 
-	if (!dev->ops->get_l2p_tbl)
-		return 0;
-
 	/* Bring up the mapping table from device */
-	ret = dev->ops->get_l2p_tbl(dev->parent, rrpc->soffset, rrpc->nr_sects,
+	ret = nvm_get_l2p_tbl(dev->parent, rrpc->soffset, rrpc->nr_sects,
 					rrpc_l2p_update, rrpc);
 	if (ret) {
 		pr_err("nvm: rrpc: could not read L2P table.\n");
@@ -1372,13 +1369,12 @@ err:
 static int rrpc_area_init(struct rrpc *rrpc, sector_t *begin)
 {
 	struct nvm_tgt_dev *dev = rrpc->dev;
-	struct nvmm_type *mt = dev->mt;
 	sector_t size = rrpc->nr_sects * dev->geo.sec_size;
 	int ret;
 
 	size >>= 9;
 
-	ret = mt->get_area(dev->parent, begin, size);
+	ret = nvm_get_area(dev->parent, begin, size);
 	if (!ret)
 		*begin >>= (ilog2(dev->geo.sec_size) - 9);
 
@@ -1388,10 +1384,9 @@ static int rrpc_area_init(struct rrpc *rrpc, sector_t *begin)
 static void rrpc_area_free(struct rrpc *rrpc)
 {
 	struct nvm_tgt_dev *dev = rrpc->dev;
-	struct nvmm_type *mt = dev->mt;
 	sector_t begin = rrpc->soffset << (ilog2(dev->geo.sec_size) - 9);
 
-	mt->put_area(dev->parent, begin);
+	nvm_put_area(dev->parent, begin);
 }
 
 static void rrpc_free(struct rrpc *rrpc)
