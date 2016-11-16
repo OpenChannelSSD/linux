@@ -8,7 +8,6 @@
 #include <linux/slab.h>
 #include <linux/blk-mq.h>
 #include <linux/hrtimer.h>
-#include <linux/lightnvm.h>
 
 struct nullb_cmd {
 	struct list_head list;
@@ -34,7 +33,6 @@ struct nullb {
 	unsigned int index;
 	struct request_queue *q;
 	struct gendisk *disk;
-	struct nvm_dev *ndev;
 	struct blk_mq_tag_set tag_set;
 	struct hrtimer timer;
 	unsigned int queue_depth;
@@ -49,7 +47,6 @@ static LIST_HEAD(nullb_list);
 static struct mutex lock;
 static int null_major;
 static int nullb_indexes;
-static struct kmem_cache *ppa_cache;
 
 enum {
 	NULL_IRQ_NONE		= 0,
@@ -112,10 +109,6 @@ MODULE_PARM_DESC(bs, "Block size (in bytes)");
 static int nr_devices = 2;
 module_param(nr_devices, int, S_IRUGO);
 MODULE_PARM_DESC(nr_devices, "Number of devices to register");
-
-static bool use_lightnvm;
-module_param(use_lightnvm, bool, S_IRUGO);
-MODULE_PARM_DESC(use_lightnvm, "Register as a LightNVM device");
 
 static int irqmode = NULL_IRQ_SOFTIRQ;
 
@@ -414,188 +407,15 @@ static void cleanup_queues(struct nullb *nullb)
 	kfree(nullb->queues);
 }
 
-#ifdef CONFIG_NVM
-
-static void null_lnvm_end_io(struct request *rq, int error)
-{
-	struct nvm_rq *rqd = rq->end_io_data;
-
-	nvm_end_io(rqd, error);
-
-	blk_put_request(rq);
-}
-
-static int null_lnvm_submit_io(struct nvm_dev *dev, struct nvm_rq *rqd)
-{
-	struct request_queue *q = dev->q;
-	struct request *rq;
-	struct bio *bio = rqd->bio;
-
-	rq = blk_mq_alloc_request(q, bio_data_dir(bio), 0);
-	if (IS_ERR(rq))
-		return -ENOMEM;
-
-	rq->cmd_type = REQ_TYPE_DRV_PRIV;
-	rq->__sector = bio->bi_iter.bi_sector;
-	rq->ioprio = bio_prio(bio);
-
-	if (bio_has_data(bio))
-		rq->nr_phys_segments = bio_phys_segments(q, bio);
-
-	rq->__data_len = bio->bi_iter.bi_size;
-	rq->bio = rq->biotail = bio;
-
-	rq->end_io_data = rqd;
-
-	blk_execute_rq_nowait(q, NULL, rq, 0, null_lnvm_end_io);
-
-	return 0;
-}
-
-static int null_lnvm_id(struct nvm_dev *dev, struct nvm_id *id)
-{
-	sector_t size = gb * 1024 * 1024 * 1024ULL;
-	sector_t blksize;
-	struct nvm_id_group *grp;
-
-	id->ver_id = 0x1;
-	id->vmnt = 0;
-	id->cgrps = 1;
-	id->cap = 0x2;
-	id->dom = 0x1;
-
-	id->ppaf.blk_offset = 0;
-	id->ppaf.blk_len = 16;
-	id->ppaf.pg_offset = 16;
-	id->ppaf.pg_len = 16;
-	id->ppaf.sect_offset = 32;
-	id->ppaf.sect_len = 8;
-	id->ppaf.pln_offset = 40;
-	id->ppaf.pln_len = 8;
-	id->ppaf.lun_offset = 48;
-	id->ppaf.lun_len = 8;
-	id->ppaf.ch_offset = 56;
-	id->ppaf.ch_len = 8;
-
-	sector_div(size, bs); /* convert size to pages */
-	size >>= 8; /* concert size to pgs pr blk */
-	grp = &id->groups[0];
-	grp->mtype = 0;
-	grp->fmtype = 0;
-	grp->num_ch = 1;
-	grp->num_pg = 256;
-	blksize = size;
-	size >>= 16;
-	grp->num_lun = size + 1;
-	sector_div(blksize, grp->num_lun);
-	grp->num_blk = blksize;
-	grp->num_pln = 1;
-
-	grp->fpg_sz = bs;
-	grp->csecs = bs;
-	grp->trdt = 25000;
-	grp->trdm = 25000;
-	grp->tprt = 500000;
-	grp->tprm = 500000;
-	grp->tbet = 1500000;
-	grp->tbem = 1500000;
-	grp->mpos = 0x010101; /* single plane rwe */
-	grp->cpar = hw_queue_depth;
-
-	return 0;
-}
-
-static void *null_lnvm_create_dma_pool(struct nvm_dev *dev, char *name)
-{
-	mempool_t *virtmem_pool;
-
-	virtmem_pool = mempool_create_slab_pool(64, ppa_cache);
-	if (!virtmem_pool) {
-		pr_err("null_blk: Unable to create virtual memory pool\n");
-		return NULL;
-	}
-
-	return virtmem_pool;
-}
-
-static void null_lnvm_destroy_dma_pool(void *pool)
-{
-	mempool_destroy(pool);
-}
-
-static void *null_lnvm_dev_dma_alloc(struct nvm_dev *dev, void *pool,
-				gfp_t mem_flags, dma_addr_t *dma_handler)
-{
-	return mempool_alloc(pool, mem_flags);
-}
-
-static void null_lnvm_dev_dma_free(void *pool, void *entry,
-							dma_addr_t dma_handler)
-{
-	mempool_free(entry, pool);
-}
-
-static struct nvm_dev_ops null_lnvm_dev_ops = {
-	.identity		= null_lnvm_id,
-	.submit_io		= null_lnvm_submit_io,
-
-	.create_dma_pool	= null_lnvm_create_dma_pool,
-	.destroy_dma_pool	= null_lnvm_destroy_dma_pool,
-	.dev_dma_alloc		= null_lnvm_dev_dma_alloc,
-	.dev_dma_free		= null_lnvm_dev_dma_free,
-
-	/* Simulate nvme protocol restriction */
-	.max_phys_sect		= 64,
-};
-
-static int null_nvm_register(struct nullb *nullb)
-{
-	struct nvm_dev *dev;
-	int rv;
-
-	dev = nvm_alloc_dev(0);
-	if (!dev)
-		return -ENOMEM;
-
-	dev->q = nullb->q;
-	memcpy(dev->name, nullb->disk_name, DISK_NAME_LEN);
-	dev->ops = &null_lnvm_dev_ops;
-
-	rv = nvm_register(dev);
-	if (rv) {
-		kfree(dev);
-		return rv;
-	}
-	nullb->ndev = dev;
-	return 0;
-}
-
-static void null_nvm_unregister(struct nullb *nullb)
-{
-	nvm_unregister(nullb->ndev);
-}
-#else
-static int null_nvm_register(struct nullb *nullb)
-{
-	pr_err("null_blk: CONFIG_NVM needs to be enabled for LightNVM\n");
-	return -EINVAL;
-}
-static void null_nvm_unregister(struct nullb *nullb) {}
-#endif /* CONFIG_NVM */
-
 static void null_del_dev(struct nullb *nullb)
 {
 	list_del_init(&nullb->list);
 
-	if (use_lightnvm)
-		null_nvm_unregister(nullb);
-	else
-		del_gendisk(nullb->disk);
+	del_gendisk(nullb->disk);
 	blk_cleanup_queue(nullb->q);
 	if (queue_mode == NULL_Q_MQ)
 		blk_mq_free_tag_set(&nullb->tag_set);
-	if (!use_lightnvm)
-		put_disk(nullb->disk);
+	put_disk(nullb->disk);
 	cleanup_queues(nullb);
 	kfree(nullb);
 }
@@ -769,11 +589,7 @@ static int null_add_dev(void)
 
 	sprintf(nullb->disk_name, "nullb%d", nullb->index);
 
-	if (use_lightnvm)
-		rv = null_nvm_register(nullb);
-	else
-		rv = null_gendisk_register(nullb);
-
+	rv = null_gendisk_register(nullb);
 	if (rv)
 		goto out_cleanup_blk_queue;
 
@@ -807,18 +623,6 @@ static int __init null_init(void)
 		bs = PAGE_SIZE;
 	}
 
-	if (use_lightnvm && bs != 4096) {
-		pr_warn("null_blk: LightNVM only supports 4k block size\n");
-		pr_warn("null_blk: defaults block size to 4k\n");
-		bs = 4096;
-	}
-
-	if (use_lightnvm && queue_mode != NULL_Q_MQ) {
-		pr_warn("null_blk: LightNVM only supported for blk-mq\n");
-		pr_warn("null_blk: defaults queue mode to blk-mq\n");
-		queue_mode = NULL_Q_MQ;
-	}
-
 	if (queue_mode == NULL_Q_MQ && use_per_node_hctx) {
 		if (submit_queues < nr_online_nodes) {
 			pr_warn("null_blk: submit_queues param is set to %u.",
@@ -836,16 +640,6 @@ static int __init null_init(void)
 	if (null_major < 0)
 		return null_major;
 
-	if (use_lightnvm) {
-		ppa_cache = kmem_cache_create("ppa_cache", 64 * sizeof(u64),
-								0, 0, NULL);
-		if (!ppa_cache) {
-			pr_err("null_blk: unable to create ppa cache\n");
-			ret = -ENOMEM;
-			goto err_ppa;
-		}
-	}
-
 	for (i = 0; i < nr_devices; i++) {
 		ret = null_add_dev();
 		if (ret)
@@ -860,8 +654,6 @@ err_dev:
 		nullb = list_entry(nullb_list.next, struct nullb, list);
 		null_del_dev(nullb);
 	}
-	kmem_cache_destroy(ppa_cache);
-err_ppa:
 	unregister_blkdev(null_major, "nullb");
 	return ret;
 }
@@ -878,8 +670,6 @@ static void __exit null_exit(void)
 		null_del_dev(nullb);
 	}
 	mutex_unlock(&lock);
-
-	kmem_cache_destroy(ppa_cache);
 }
 
 module_init(null_init);
