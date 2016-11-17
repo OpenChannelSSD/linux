@@ -346,7 +346,7 @@ static int pblk_bb_discovery(struct nvm_tgt_dev *dev, struct pblk_lun *rlun)
 
 	rlun->nr_free_blocks = geo->blks_per_lun;
 	for (i = 0; i < nr_blks; i++) {
-		if (blks[i] == NVM_BLK_T_FREE)
+		if (blks[i] == NVM_BLK_T_FREE && i > 16)
 			continue;
 
 		rblk = &rlun->blocks[i];
@@ -639,11 +639,11 @@ static void *pblk_init(struct nvm_tgt_dev *dev, struct gendisk *tdisk)
 	struct pblk *pblk;
 	int ret;
 
-	if (dev->identity.dom & NVM_RSP_L2P) {
-		pr_err("pblk: device-side L2P table not supported. (%x)\n",
-							dev->identity.dom);
-		return ERR_PTR(-EINVAL);
-	}
+	/* if (dev->identity.dom & NVM_RSP_L2P) { */
+		/* pr_err("pblk: device-side L2P table not supported. (%x)\n", */
+							/* dev->identity.dom); */
+		/* return ERR_PTR(-EINVAL); */
+	/* } */
 
 	pblk = kzalloc(sizeof(struct pblk), GFP_KERNEL);
 	if (!pblk)
