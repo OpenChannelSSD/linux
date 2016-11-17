@@ -373,14 +373,15 @@ static int pblk_luns_init(struct pblk *pblk, struct ppa_addr *luns)
 	struct nvm_geo *geo = &dev->geo;
 	struct pblk_lun *rlun;
 	int i, j, mod, ret = -EINVAL;
-	int max_write_ppas;
+	/* int max_write_ppas; */
 
 	pblk->nr_luns = geo->nr_luns;
 
 	pblk->min_write_pgs = geo->sec_per_pl * (geo->sec_size / PAGE_SIZE);
-	max_write_ppas = pblk->min_write_pgs * pblk->nr_luns;
-	pblk->max_write_pgs = (max_write_ppas < nvm_max_phys_sects(dev)) ?
-				max_write_ppas : nvm_max_phys_sects(dev);
+	/* max_write_ppas = pblk->min_write_pgs * pblk->nr_luns; */
+	/* pblk->max_write_pgs = (max_write_ppas < nvm_max_phys_sects(dev)) ? */
+				/* max_write_ppas : nvm_max_phys_sects(dev); */
+	pblk->max_write_pgs = pblk->min_write_pgs;
 
 	/* TODO: Implement unbalanced LUN support */
 	if (geo->luns_per_chnl < 0) {
