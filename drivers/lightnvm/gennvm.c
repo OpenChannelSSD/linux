@@ -261,6 +261,9 @@ static int gen_create_tgt(struct nvm_dev *dev, struct nvm_ioctl_create *create)
 	set_capacity(tdisk, tt->capacity(targetdata));
 	add_disk(tdisk);
 
+	if (tt->sysfs_init(tdisk))
+		goto err_sysfs;
+
 	t->type = tt;
 	t->disk = tdisk;
 	t->dev = tgt_dev;
@@ -270,6 +273,9 @@ static int gen_create_tgt(struct nvm_dev *dev, struct nvm_ioctl_create *create)
 	mutex_unlock(&gn->lock);
 
 	return 0;
+err_sysfs:
+	if (tt->exit)
+		tt->exit(targetdata);
 err_init:
 	put_disk(tdisk);
 err_queue:
