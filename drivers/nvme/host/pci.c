@@ -295,7 +295,7 @@ static void __nvme_submit_cmd(struct nvme_queue *nvmeq,
 		memcpy(&nvmeq->sq_cmds[tail], cmd, sizeof(*cmd));
 
 #ifdef CONFIG_NVM_DEBUG
-	nvm_check_write_cmd_correct(cmd);
+	/* nvm_check_write_cmd_correct(cmd); */
 #endif
 
 	if (++tail == nvmeq->q_depth)

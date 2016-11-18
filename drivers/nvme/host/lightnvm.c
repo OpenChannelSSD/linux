@@ -1030,14 +1030,14 @@ void nvm_check_write_cmd_correct(void *data)
 						NVM_IO_SCRAMBLE_ENABLE;
 	int min_write_pgs = 8;
 	int erase_planes = 2;
-	u64 pln_mask = 0x40;
-	u64 pln_sec_mask = 0x70;
-	u64 rest_mask = 0xFFFFFF8F;
+	u64 pln_mask = 0x4;
+	u64 pln_sec_mask = 0x7;
+	u64 rest_mask = 0xFFFFFFF8;
 
 	if (cmd->ph_rw.opcode == NVM_OP_PWRITE) {
 		int ppa_off = 0;
 		int i;
-		u64 *ppa_list, ppa1, ppa2, mask1, mask2, exp, exp2;
+		u64 *ppa_list, ppa1, ppa2, exp, exp2;
 
 		ppa_list = (u64*) phys_to_virt(le64_to_cpu(cmd->ph_rw.spba));
 
@@ -1048,15 +1048,12 @@ void nvm_check_write_cmd_correct(void *data)
 			pr_err("W ERROR - nppas:%d\n", nppas);
 
 next:
-		mask1 = pln_sec_mask;
-		mask2 = rest_mask;
-
-		exp2 = ppa_list[ppa_off] & mask2;
+		exp2 = ppa_list[ppa_off] & rest_mask;
 
 		for (i = ppa_off; i < ppa_off + min_write_pgs; i++) {
 			exp = i % min_write_pgs;
-			ppa1 = (ppa_list[i] & mask1) >> 4;
-			ppa2 = ppa_list[i] & mask2;
+			ppa1 = (ppa_list[i] & pln_sec_mask);
+			ppa2 = ppa_list[i] & rest_mask;
 
 			if (ppa2 != exp2) {
 				int j;
@@ -1098,7 +1095,7 @@ next:
 		if (flags != cmd_r_flags && flags != NVM_IO_SLC_MODE)
 			pr_err("R ERROR - flags:%d\n", flags);
 	} else if (cmd->ph_rw.opcode == NVM_OP_ERASE) {
-		u64 *ppa_list, ppa, mask, exp;
+		u64 *ppa_list, ppa, exp;
 		int i;
 
 		ppa_list = (u64*) phys_to_virt(le64_to_cpu(cmd->ph_rw.spba));
@@ -1110,10 +1107,9 @@ next:
 			pr_err("E ERROR - nppas:%d\n", flags);
 
 		/* Planes */
-		mask = pln_mask;
 		for (i = 0; i < nppas; i++) {
 			exp = i;
-			ppa = (ppa_list[i] & mask) >> 6;
+			ppa = (ppa_list[i] & pln_mask) >> 2;
 
 			if (ppa != exp) {
 				int j;
