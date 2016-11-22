@@ -81,15 +81,11 @@ static int pblk_setup_rec_rq(struct pblk *pblk, struct nvm_rq *rqd,
 			     struct pblk_ctx *ctx, unsigned int nr_rec_secs)
 {
 	struct pblk_compl_ctx *c_ctx = ctx->c_ctx;
-	unsigned int valid_secs = c_ctx->nr_valid;
-	unsigned int padded_secs = c_ctx->nr_padded;
-	unsigned int nr_secs = valid_secs + padded_secs;
 	unsigned long lun_bitmap[PBLK_MAX_LUNS_BITMAP];
 	unsigned int setup_secs;
 	struct pblk_sec_meta *meta;
 	int min = pblk->min_write_pgs;
-	int i;
-	int ret = 0;
+	int i, ret;
 #ifdef CONFIG_NVM_DEBUG
 	struct ppa_addr *ppa_list;
 #endif
@@ -98,23 +94,12 @@ static int pblk_setup_rec_rq(struct pblk *pblk, struct nvm_rq *rqd,
 
 	ret = pblk_write_alloc_rq(pblk, rqd, ctx, nr_rec_secs);
 	if (ret)
-		goto out;
+		return ret;
 
 	meta = rqd->meta_list;
 
-	if (unlikely(nr_rec_secs == 1)) {
-		/*
-		 * Single sector path - this path is highly improbable since
-		 * controllers typically deal with multi-sector and multi-plane
-		 * pages. This path is though useful for testing on QEMU
-		 */
-#ifdef CONFIG_NVM_DEBUG
-		BUG_ON(nr_secs != 1);
-		BUG_ON(padded_secs != 0);
-#endif
-		ret = pblk_write_setup_s(pblk, rqd, ctx, meta, lun_bitmap);
-		goto out;
-	}
+	if (nr_rec_secs == 1)
+		return pblk_write_setup_s(pblk, rqd, ctx, meta, lun_bitmap);
 
 	for (i = 0; i < nr_rec_secs; i += min) {
 		if (i + min > nr_rec_secs) {
@@ -134,6 +119,8 @@ static int pblk_setup_rec_rq(struct pblk *pblk, struct nvm_rq *rqd,
 						(nr_rec_secs % min) : min;
 		ret = pblk_write_setup_m(pblk, rqd, ctx, meta, setup_secs, i,
 								lun_bitmap);
+		if (ret)
+			break;
 	}
 
 	rqd->ppa_status = (u64)0;
@@ -144,7 +131,6 @@ static int pblk_setup_rec_rq(struct pblk *pblk, struct nvm_rq *rqd,
 	if (pblk_boundary_checks(pblk->dev, rqd->ppa_list, rqd->nr_ppas))
 		WARN_ON(1);
 #endif
-out:
 	return ret;
 }
 
@@ -366,7 +352,6 @@ int pblk_recov_read(struct pblk *pblk, struct pblk_block *rblk,
 	if (nvm_submit_io(dev, rqd)) {
 		pr_err("pblk: I/O submission failed\n");
 		ret = -1;
-		nvm_free_rqd_ppalist(dev->parent, rqd);
 		goto free_ppa_list;
 	}
 	wait_for_completion_io(&wait);
@@ -380,7 +365,6 @@ free_ppa_list:
 free_rqd:
 	pblk_free_rqd(pblk, rqd, READ);
 	bio_put(bio);
-
 	return ret;
 }
 
@@ -487,8 +471,7 @@ int pblk_recov_scan_blk(struct pblk *pblk, struct pblk_block *rblk)
 	rlpg = pblk_alloc_blk_meta(pblk, rblk, PBLK_BLK_ST_CLOSED);
 	if (!rlpg) {
 		pr_err("pblk: could not allocate recovery ppa list\n");
-		ret = -1;
-		goto out;
+		return -ENOMEM;
 	}
 
 	ret = pblk_recov_read(pblk, rblk, rlpg);
@@ -525,11 +508,9 @@ int pblk_recov_scan_blk(struct pblk *pblk, struct pblk_block *rblk)
 		/* TODO: when not padding the whole block, mark as invalid */
 	}
 
-	return ret;
-
+	return 0;
 free_rlpg:
 	mempool_free(rlpg, pblk->blk_meta_pool);
-out:
 	return ret;
 }
 

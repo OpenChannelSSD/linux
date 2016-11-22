@@ -48,7 +48,6 @@ static void pblk_gc_setup_rq(struct pblk *pblk, struct pblk_block *rblk,
 			(*ignored)++;
 			continue;
 		}
-
 #ifdef CONFIG_NVM_DEBUG
 	BUG_ON(!(lba >= 0 && lba < pblk->rl.nr_secs));
 #endif

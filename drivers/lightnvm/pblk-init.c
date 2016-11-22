@@ -78,7 +78,6 @@ static int pblk_submit_io(struct request_queue *q, struct pblk *pblk,
 static blk_qc_t pblk_make_rq(struct request_queue *q, struct bio *bio)
 {
 	struct pblk *pblk = q->queuedata;
-	int err;
 
 	if (bio_op(bio) == REQ_OP_DISCARD) {
 		pblk_discard(pblk, bio);
@@ -86,10 +85,7 @@ static blk_qc_t pblk_make_rq(struct request_queue *q, struct bio *bio)
 			return BLK_QC_T_NONE;
 	}
 
-	err = pblk_submit_io(q, pblk, bio, PBLK_IOTYPE_USER);
-	switch (err) {
-	case NVM_IO_OK:
-		return BLK_QC_T_NONE;
+	switch (pblk_submit_io(q, pblk, bio, PBLK_IOTYPE_USER)) {
 	case NVM_IO_ERR:
 		bio_io_error(bio);
 		break;
@@ -320,9 +316,7 @@ static int pblk_bb_discovery(struct nvm_tgt_dev *dev, struct pblk_lun *rlun)
 	struct pblk_block *rblk;
 	struct ppa_addr ppa;
 	u8 *blks;
-	int nr_blks;
-	int i;
-	int ret;
+	int nr_blks, i, ret;
 
 	nr_blks = geo->blks_per_lun * geo->plane_mode;
 	blks = kmalloc(nr_blks, GFP_KERNEL);
@@ -334,15 +328,14 @@ static int pblk_bb_discovery(struct nvm_tgt_dev *dev, struct pblk_lun *rlun)
 	ppa.g.lun = rlun->bppa.g.lun;
 
 	ret = nvm_get_bb_tbl(dev->parent, ppa, blks);
-	if (ret) {
-		pr_err("pblk: could not get BB table\n");
-		kfree(blks);
+	if (ret)
 		goto out;
-	}
 
 	nr_blks = nvm_bb_tbl_fold(dev->parent, blks, nr_blks);
-	if (nr_blks < 0)
-		return nr_blks;
+	if (nr_blks < 0) {
+		ret = nr_blks;
+		goto out;
+	}
 
 	rlun->nr_free_blocks = geo->blks_per_lun;
 	for (i = 0; i < nr_blks; i++) {
@@ -354,7 +347,6 @@ static int pblk_bb_discovery(struct nvm_tgt_dev *dev, struct pblk_lun *rlun)
 		rblk->state = NVM_BLK_ST_BAD;
 		rlun->nr_free_blocks--;
 	}
-
 out:
 	kfree(blks);
 	return ret;
@@ -372,7 +364,7 @@ static int pblk_luns_init(struct pblk *pblk, struct ppa_addr *luns)
 	struct nvm_tgt_dev *dev = pblk->dev;
 	struct nvm_geo *geo = &dev->geo;
 	struct pblk_lun *rlun;
-	int i, j, mod, ret = -EINVAL;
+	int i, j, mod, ret;
 	/* int max_write_ppas; */
 
 	pblk->nr_luns = geo->nr_luns;
@@ -429,10 +421,8 @@ static int pblk_luns_init(struct pblk *pblk, struct ppa_addr *luns)
 		pblk_set_lun_ppa(rlun, ppa);
 		rlun->blocks = vzalloc(sizeof(struct pblk_block) *
 							geo->blks_per_lun);
-		if (!rlun->blocks) {
-			ret = -ENOMEM;
-			goto err;
-		}
+		if (!rlun->blocks)
+			return -ENOMEM;
 
 		INIT_LIST_HEAD(&rlun->free_list);
 		INIT_LIST_HEAD(&rlun->bb_list);
@@ -455,8 +445,9 @@ static int pblk_luns_init(struct pblk *pblk, struct ppa_addr *luns)
 			list_add_tail(&rblk->list, &rlun->free_list);
 		}
 
-		if (pblk_bb_discovery(dev, rlun))
-			goto err;
+		ret = pblk_bb_discovery(dev, rlun);
+		if (ret)
+			return ret;
 
 		spin_lock_init(&rlun->lock);
 
@@ -465,8 +456,6 @@ static int pblk_luns_init(struct pblk *pblk, struct ppa_addr *luns)
 	}
 
 	return 0;
-err:
-	return ret;
 }
 
 static int pblk_writer_init(struct pblk *pblk)
@@ -767,4 +756,4 @@ module_exit(pblk_module_exit);
 MODULE_AUTHOR("Javier Gonzalez <jg@lightnvm.io>");
 MODULE_AUTHOR("Matias Bjorling <m@bjorling.me>");
 MODULE_LICENSE("GPL v2");
-MODULE_DESCRIPTION("Physical Block-Device Target for Open-Channel SSDs");
+MODULE_DESCRIPTION("Physical Block-Device for Open-Channel SSDs");

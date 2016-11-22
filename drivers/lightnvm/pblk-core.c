@@ -18,7 +18,6 @@
  *   - Implement L2P snapshot on graceful tear down.
  *   - Separate mapping from actual stripping strategy to enable
  *     workload-specific optimizations
- *   - Implement support for new MLC & TLC chips
  */
 
 #include "pblk.h"
@@ -385,7 +384,6 @@ int pblk_update_map(struct pblk *pblk, sector_t laddr, struct pblk_block *rblk,
 		    struct ppa_addr ppa)
 {
 	struct pblk_addr *gp;
-	int ret = 0;
 
 #ifdef CONFIG_NVM_DEBUG
 	BUG_ON(!rblk &&
@@ -400,12 +398,11 @@ int pblk_update_map(struct pblk *pblk, sector_t laddr, struct pblk_block *rblk,
 
 	if (gp->rblk)
 		pblk_page_invalidate(pblk, gp);
-
 	gp->ppa = ppa;
 	gp->rblk = rblk;
-
 	spin_unlock(&pblk->trans_lock);
-	return ret;
+
+	return 0;
 }
 
 int pblk_update_map_gc(struct pblk *pblk, sector_t laddr,
@@ -413,7 +410,6 @@ int pblk_update_map_gc(struct pblk *pblk, sector_t laddr,
 		       struct pblk_block *gc_rblk)
 {
 	struct pblk_addr *gp;
-	int ret = 0;
 
 	/* logic error: lba out-of-bounds */
 	BUG_ON(laddr >= pblk->rl.nr_secs);
@@ -424,20 +420,17 @@ int pblk_update_map_gc(struct pblk *pblk, sector_t laddr,
 	/* Prevent updated entries to be overwritten by GC */
 	if (gp->rblk && gc_rblk->id != gp->rblk->id)
 		goto out;
-
 	gp->ppa = ppa;
 	gp->rblk = rblk;
-
 out:
 	spin_unlock(&pblk->trans_lock);
-	return ret;
+
+	return 0;
 }
 
 static int pblk_setup_pad_rq(struct pblk *pblk, struct pblk_block *rblk,
 			     struct nvm_rq *rqd, struct pblk_ctx *ctx)
 {
-	struct nvm_tgt_dev *dev = pblk->dev;
-	struct nvm_geo *geo = &dev->geo;
 	struct pblk_compl_ctx *c_ctx = ctx->c_ctx;
 	unsigned int valid_secs = c_ctx->nr_valid;
 	unsigned int padded_secs = c_ctx->nr_padded;
@@ -445,7 +438,7 @@ static int pblk_setup_pad_rq(struct pblk *pblk, struct pblk_block *rblk,
 	struct pblk_sec_meta *meta;
 	int min = pblk->min_write_pgs;
 	int i;
-	int ret = 0;
+	int ret;
 
 	ret = pblk_write_alloc_rq(pblk, rqd, ctx, nr_secs);
 	if (ret)
@@ -459,19 +452,13 @@ static int pblk_setup_pad_rq(struct pblk *pblk, struct pblk_block *rblk,
 		 * controllers typically deal with multi-sector and multi-plane
 		 * pages. This path is though useful for testing on QEMU
 		 */
-#ifdef CONFIG_NVM_DEBUG
-		BUG_ON(geo->sec_per_pl != 1);
-		BUG_ON(padded_secs != 0);
-#endif
 
 		ret = pblk_map_page(pblk, rblk, c_ctx->sentry, &rqd->ppa_addr,
 								&meta[0], 1, 0);
-		if (ret) {
-			/* There is no more available pages to map the current
-			 * request. Rate limiter had probably failed
-			 */
-			BUG_ON(1);
-		}
+		/* There is no more available pages to map the current
+		 * request. Rate limiter had probably failed
+		 */
+		WARN_ON(ret);
 
 		goto out;
 	}
@@ -480,13 +467,10 @@ static int pblk_setup_pad_rq(struct pblk *pblk, struct pblk_block *rblk,
 		ret = pblk_map_page(pblk, rblk, c_ctx->sentry + i,
 						&rqd->ppa_list[i],
 						&meta[i], min, 0);
-
-		if (ret) {
-			/* There is no more available pages to map the current
-			 * request. Rate limiter had probably failed
-			 */
-			BUG_ON(1);
-		}
+		/* There is no more available pages to map the current
+		 * request. Rate limiter had probably failed
+		 */
+		WARN_ON(ret);
 	}
 
 #ifdef CONFIG_NVM_DEBUG
@@ -592,9 +576,9 @@ static void pblk_free_blk_meta(struct pblk *pblk, struct pblk_block *rblk)
 
 unsigned long pblk_nr_free_blks(struct pblk *pblk)
 {
-	int i;
-	unsigned int avail = 0;
 	struct pblk_lun *rlun;
+	unsigned long avail = 0;
+	int i;
 
 	for (i = 0; i < pblk->nr_luns; i++) {
 		rlun = &pblk->luns[i];
@@ -696,7 +680,6 @@ void pblk_put_blk(struct pblk *pblk, struct pblk_block *rblk)
 		list_move_tail(&rblk->list, &rlun->bb_list);
 		rblk->state = NVM_BLK_ST_BAD;
 	} else {
-		WARN_ON_ONCE(1);
 		pr_err("pblk: erroneous block type (%d-> %u)\n",
 							rblk->id, rblk->state);
 		list_move_tail(&rblk->list, &rlun->bb_list);
