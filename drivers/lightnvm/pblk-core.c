@@ -474,7 +474,7 @@ static int pblk_setup_pad_rq(struct pblk *pblk, struct pblk_block *rblk,
 	}
 
 #ifdef CONFIG_NVM_DEBUG
-	if (pblk_boundary_checks(dev, rqd->ppa_list, rqd->nr_ppas))
+	if (pblk_boundary_checks(pblk->dev, rqd->ppa_list, rqd->nr_ppas))
 		WARN_ON(1);
 #endif
 
