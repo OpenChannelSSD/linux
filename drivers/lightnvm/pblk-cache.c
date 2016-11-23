@@ -31,20 +31,17 @@ static int __pblk_write_to_cache(struct pblk *pblk, struct bio *bio,
 				 unsigned long flags, unsigned int nr_entries)
 {
 	sector_t laddr = pblk_get_laddr(bio);
-	struct bio *ctx_bio = (bio->bi_opf & REQ_PREFLUSH) ? bio : NULL;
 	struct pblk_w_ctx w_ctx;
 	unsigned long bpos, pos;
 	unsigned int i;
-	int ret = (ctx_bio) ? NVM_IO_OK : NVM_IO_DONE;
 
 	/* Update the write buffer head (mem) with the entries that we can
 	 * write. The write in itself cannot fail, so there is no need to
 	 * rollback from here on.
 	 */
 	if (!pblk_rb_may_write(&pblk->rwb, nr_entries, nr_entries, &bpos))
-		return NVM_IO_REQUEUE;
+		return 0;
 
-	w_ctx.bio = ctx_bio;
 	w_ctx.flags = flags;
 	w_ctx.priv = NULL;
 	w_ctx.paddr = 0;
@@ -69,7 +66,7 @@ static int __pblk_write_to_cache(struct pblk *pblk, struct bio *bio,
 	atomic_add(nr_entries, &pblk->req_writes);
 #endif
 
-	return ret;
+	return 1;
 }
 
 int pblk_write_to_cache(struct pblk *pblk, struct bio *bio, unsigned long flags)
@@ -81,9 +78,11 @@ int pblk_write_to_cache(struct pblk *pblk, struct bio *bio, unsigned long flags)
 #ifdef CONFIG_NVM_DEBUG
 		atomic_inc(&pblk->nr_flush);
 #endif
+
+		if (pblk_rb_sync_point_set(&pblk->rwb, bio))
+			ret = NVM_IO_OK;
+
 		if (!bio_has_data(bio)) {
-			if (pblk_rb_sync_point_set(&pblk->rwb, bio))
-				ret = NVM_IO_OK;
 			pblk_write_kick(pblk);
 			goto out;
 		}
@@ -92,8 +91,7 @@ int pblk_write_to_cache(struct pblk *pblk, struct bio *bio, unsigned long flags)
 	pblk_rl_user_in(pblk, nr_secs);
 
 retry:
-	ret = __pblk_write_to_cache(pblk, bio, flags, nr_secs);
-	if (ret == NVM_IO_REQUEUE) {
+	if (!__pblk_write_to_cache(pblk, bio, flags, nr_secs)) {
 		schedule();
 		goto retry;
 	}
@@ -105,8 +103,9 @@ retry:
 		spin_unlock(&pblk->kick_lock);
 
 		pblk_write_kick(pblk);
-	} else
+	} else {
 		spin_unlock(&pblk->kick_lock);
+	}
 
 	if (bio->bi_opf & REQ_PREFLUSH)
 		pblk_write_kick(pblk);
@@ -139,7 +138,6 @@ retry:
 		goto retry;
 	}
 
-	w_ctx.bio = NULL;
 	w_ctx.flags = flags | PBLK_IOTYPE_GC;
 	w_ctx.priv = ref_buf;
 	w_ctx.paddr = 0;

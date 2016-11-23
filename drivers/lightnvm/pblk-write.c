@@ -327,11 +327,8 @@ static unsigned long pblk_end_w_bio(struct pblk *pblk, struct nvm_rq *rqd,
 
 		pblk_sync_buffer(pblk, w_ctx->ppa.rblk, w_ctx->paddr,
 								w_ctx->flags);
-		original_bio = w_ctx->bio;
-		if (original_bio) {
+		while ((original_bio = bio_list_pop(&w_ctx->bios)))
 			bio_endio(original_bio);
-			w_ctx->bio = NULL;
-		}
 
 		if (rblk->rlun->id != cur_lun) {
 			up(&rblk->rlun->wr_sem);

@@ -118,8 +118,8 @@ struct pblk_rec_ctx {
 
 /* Write context */
 struct pblk_w_ctx {
-	struct bio *bio;		/* Original bio - used for completing in
-					 * REQ_FUA, REQ_FLUSH case
+	struct bio_list bios;		/* Original bios - used for completion
+					   in REQ_FUA, REQ_FLUSH case
 					 */
 	void *priv;			/* Private pointer */
 	sector_t lba;			/* Logic addr. associated with entry */

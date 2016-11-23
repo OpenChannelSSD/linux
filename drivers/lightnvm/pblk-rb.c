@@ -104,6 +104,7 @@ int pblk_rb_init(struct pblk_rb *rb, struct pblk_rb_entry *rb_entry_base,
 			entry = &rb->entries[init_entries++];
 			entry->data = kaddr + (i * rb->seg_size);
 			entry->w_ctx.flags |= PBLK_WRITABLE_ENTRY;
+			bio_list_init(&entry->w_ctx.bios);
 		}
 
 		list_add_tail(&page_set->list, &rb->pages);
@@ -362,14 +363,13 @@ try:
 
 	memcpy(entry->data, data, rb->seg_size);
 
-	entry->w_ctx.bio = w_ctx.bio;
 	entry->w_ctx.lba = w_ctx.lba;
 	entry->w_ctx.ppa = w_ctx.ppa;
 	entry->w_ctx.paddr = w_ctx.paddr;
 	entry->w_ctx.priv = w_ctx.priv;
 	flags |= w_ctx.flags;
 
-	if (w_ctx.bio) {
+	if (bio_list_empty(&w_ctx.bios)) {
 		/* Release pointer controlling flushes */
 		smp_store_release(&rb->sync_point, ring_pos);
 	}
@@ -520,7 +520,7 @@ try:
 			goto out;
 		}
 
-		if (entry->w_ctx.bio != NULL) {
+		if (!bio_list_empty(&entry->w_ctx.bios)) {
 			*sync_point = pos;
 #ifdef CONFIG_NVM_DEBUG
 			atomic_dec(&rb->inflight_sync_point);
@@ -638,9 +638,6 @@ int pblk_rb_sync_point_set(struct pblk_rb *rb, struct bio *bio)
 {
 	struct pblk_rb_entry *entry;
 	unsigned long mem, subm, sync_point;
-	int ret = 0;
-
-	spin_lock(&rb->r_lock);
 
 	/* Protect from reads and writes */
 	mem = smp_load_acquire(&rb->mem);
@@ -653,27 +650,19 @@ int pblk_rb_sync_point_set(struct pblk_rb *rb, struct bio *bio)
 #endif
 
 	if (mem == subm)
-		goto out;
+		return 0;
+
+	spin_lock_irq(&rb->s_lock);
 
 	sync_point = (mem == 0) ? (rb->nr_entries - 1) : (mem - 1);
 	entry = &rb->entries[sync_point];
-
-	if (entry->w_ctx.bio) {
-		pr_err("pblk: Duplicated sync point:%lu\n", sync_point);
-		ret = -EINVAL;
-		goto out;
-	}
-
-	entry->w_ctx.bio = bio;
+	bio_list_add(&entry->w_ctx.bios, bio);
 
 	/* Protect syncs */
 	smp_store_release(&rb->sync_point, sync_point);
 
-	ret = 1;
-
-out:
-	spin_unlock(&rb->r_lock);
-	return ret;
+	spin_unlock_irq(&rb->s_lock);
+	return 1;
 }
 
 void pblk_rb_sync_point_reset(struct pblk_rb *rb, unsigned long sp)
