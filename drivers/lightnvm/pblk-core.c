@@ -60,19 +60,16 @@ void pblk_free_rqd(struct pblk *pblk, struct nvm_rq *rqd, int rw)
 void pblk_print_failed_rqd(struct pblk *pblk, struct nvm_rq *rqd, int error)
 {
 	int offset = -1;
-	struct ppa_addr p;
 
 	if (rqd->nr_ppas ==  1) {
-		p = dev_to_generic_addr(pblk->dev, rqd->ppa_addr);
-		print_ppa(&p, "rqd", error);
+		print_ppa(&rqd->ppa_addr, "rqd", error);
 		return;
 	}
 
 	while ((offset =
 		find_next_bit((void *)&rqd->ppa_status, rqd->nr_ppas,
 						offset + 1)) < rqd->nr_ppas) {
-		p = dev_to_generic_addr(pblk->dev, rqd->ppa_list[offset]);
-		print_ppa(&p, "rqd", error);
+		print_ppa(&rqd->ppa_list[offset], "rqd", error);
 	}
 
 	pr_err("error:%d, ppa_status:%llx\n", error, rqd->ppa_status);
@@ -716,7 +713,7 @@ void pblk_mark_bb(struct pblk *pblk, struct ppa_addr ppa)
 	rblk = &rlun->blocks[ppa.g.blk];
 	rblk->state = NVM_BLK_ST_BAD;
 
-	nvm_set_bb_tbl(dev->parent, &ppa, 1, NVM_BLK_T_GRWN_BAD);
+	nvm_set_tgt_bb_tbl(dev->parent, &ppa, 1, NVM_BLK_T_GRWN_BAD);
 }
 
 void pblk_erase_blk(struct pblk *pblk, struct pblk_block *rblk)

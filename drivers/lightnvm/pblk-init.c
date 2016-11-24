@@ -327,7 +327,7 @@ static int pblk_bb_discovery(struct nvm_tgt_dev *dev, struct pblk_lun *rlun)
 	ppa.g.ch = rlun->bppa.g.ch;
 	ppa.g.lun = rlun->bppa.g.lun;
 
-	ret = nvm_get_bb_tbl(dev->parent, ppa, blks);
+	ret = nvm_get_tgt_bb_tbl(dev, ppa, blks);
 	if (ret)
 		goto out;
 

@@ -527,7 +527,7 @@ void pblk_recov_clean_g_bb_list(struct pblk *pblk, struct pblk_lun *rlun)
 
 	list_for_each_entry_safe(rblk, trblk, &g_bb_list, list) {
 		gen_ppa = pblk_blk_ppa_to_gaddr(dev, rblk, 0);
-		nvm_set_bb_tbl(dev->parent, &gen_ppa, 1, NVM_BLK_T_GRWN_BAD);
+		nvm_set_tgt_bb_tbl(dev, &gen_ppa, 1, NVM_BLK_T_GRWN_BAD);
 
 		/* As sectors are recovered, the bitmap representing valid
 		 * mapped pages is emptied

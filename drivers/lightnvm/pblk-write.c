@@ -510,7 +510,6 @@ void pblk_end_io_write(struct pblk *pblk, struct nvm_rq *rqd)
 #ifdef CONFIG_NVM_DEBUG
 		pblk_print_failed_rqd(pblk, rqd, rqd->error);
 #endif
-		nvm_addr_to_generic_mode(dev, rqd);
 		return pblk_end_w_fail(pblk, rqd);
 	}
 
