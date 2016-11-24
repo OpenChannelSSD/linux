@@ -282,8 +282,12 @@ struct pblk_block *pblk_get_blk(struct pblk *pblk, struct pblk_lun *rlun)
 	if (list_empty(&rlun->free_list))
 		goto err;
 
+retry:
 	/* Blocks are erased when put */
 	rblk = list_first_entry(&rlun->free_list, struct pblk_block, list);
+	if (rblk->state == NVM_BLK_ST_BAD)
+		goto retry;
+
 	rblk->state = NVM_BLK_ST_TGT;
 	pblk_rl_free_blks_dec(pblk, rlun);
 

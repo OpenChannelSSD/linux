@@ -438,7 +438,7 @@ static int pblk_luns_init(struct pblk *pblk, struct ppa_addr *luns)
 
 			rblk->id = j;
 			rblk->rlun = rlun;
-			rblk->state = NVM_BLK_T_FREE;
+			rblk->state = NVM_BLK_ST_FREE;
 			INIT_LIST_HEAD(&rblk->prio);
 			spin_lock_init(&rblk->lock);
 
@@ -556,7 +556,7 @@ static int pblk_blocks_init(struct pblk *pblk)
 		for (blk = 0; blk < geo->blks_per_lun; blk++) {
 			rblk = &rlun->blocks[blk];
 
-			if (!rblk->state)
+			if (rblk->state == NVM_BLK_ST_FREE)
 				pblk->capacity += geo->sec_per_blk;
 
 #ifndef CONFIG_NVM_PBLK_NO_RECOV
