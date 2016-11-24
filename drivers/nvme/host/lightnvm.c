@@ -777,6 +777,8 @@ static ssize_t nvm_dev_attr_show(struct device *dev,
 		return scnprintf(page, PAGE_SIZE, "%u\n", grp->num_blk);
 	} else if (strcmp(attr->name, "num_pages") == 0) {
 		return scnprintf(page, PAGE_SIZE, "%u\n", grp->num_pg);
+	} else if (strcmp(attr->name, "sec_per_pg") == 0) {
+		return scnprintf(page, PAGE_SIZE, "%u\n", ndev->sec_per_pg);
 	} else if (strcmp(attr->name, "page_size") == 0) {
 		return scnprintf(page, PAGE_SIZE, "%u\n", grp->fpg_sz);
 	} else if (strcmp(attr->name, "hw_sector_size") == 0) {
@@ -827,6 +829,7 @@ static NVM_DEV_ATTR_RO(num_luns);
 static NVM_DEV_ATTR_RO(num_planes);
 static NVM_DEV_ATTR_RO(num_blocks);
 static NVM_DEV_ATTR_RO(num_pages);
+static NVM_DEV_ATTR_RO(sec_per_pg);
 static NVM_DEV_ATTR_RO(page_size);
 static NVM_DEV_ATTR_RO(hw_sector_size);
 static NVM_DEV_ATTR_RO(oob_sector_size);
@@ -855,6 +858,7 @@ static struct attribute *nvm_dev_attrs[] = {
 	&dev_attr_num_planes.attr,
 	&dev_attr_num_blocks.attr,
 	&dev_attr_num_pages.attr,
+	&dev_attr_sec_per_pg.attr,
 	&dev_attr_page_size.attr,
 	&dev_attr_hw_sector_size.attr,
 	&dev_attr_oob_sector_size.attr,
