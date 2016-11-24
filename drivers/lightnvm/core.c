@@ -304,16 +304,16 @@ void nvm_put_area(struct nvm_tgt_dev *tgt_dev, sector_t lba)
 }
 EXPORT_SYMBOL(nvm_put_area);
 
-void nvm_addr_to_generic_mode(struct nvm_dev *dev, struct nvm_rq *rqd)
+void nvm_addr_to_generic_mode(struct nvm_tgt_dev *tgt_dev, struct nvm_rq *rqd)
 {
 	int i;
 
 	if (rqd->nr_ppas > 1) {
 		for (i = 0; i < rqd->nr_ppas; i++)
-			rqd->ppa_list[i] = dev_to_generic_addr(dev,
+			rqd->ppa_list[i] = dev_to_generic_addr(tgt_dev,
 							rqd->ppa_list[i]);
 	} else {
-		rqd->ppa_addr = dev_to_generic_addr(dev, rqd->ppa_addr);
+		rqd->ppa_addr = dev_to_generic_addr(tgt_dev, rqd->ppa_addr);
 	}
 }
 EXPORT_SYMBOL(nvm_addr_to_generic_mode);

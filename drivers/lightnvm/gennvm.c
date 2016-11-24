@@ -553,8 +553,10 @@ static void gen_end_io(struct nvm_rq *rqd)
 	struct nvm_tgt_instance *ins = rqd->ins;
 
 	/* Convert address space */
-	if (tgt_dev)
+	if (tgt_dev) {
+		nvm_addr_to_generic_mode(tgt_dev, rqd);
 		gen_trans_rq(tgt_dev, rqd, TRANS_DEV_TO_TGT);
+	}
 
 	ins->tt->end_io(rqd);
 }
