@@ -647,10 +647,10 @@ static int nvme_nvm_user_vio(struct nvme_ns *ns,
 		}
 	}
 
-	if (!vio.nppas)
-		cmd->ph_rw.spba = cpu_to_le64(vio.ppas);
-	else
+	if (vio.nppas)
 		cmd->ph_rw.spba = cpu_to_le64(ppa_dma);
+	else
+		cmd->ph_rw.spba = cpu_to_le64(vio.ppas);
 
 	cmd->ph_rw.opcode = vio.opcode;
 	cmd->ph_rw.nsid = cpu_to_le32(ns->ns_id);
