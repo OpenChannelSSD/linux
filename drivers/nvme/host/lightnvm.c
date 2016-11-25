@@ -672,14 +672,9 @@ static int nvme_nvm_user_vio(struct nvme_ns *ns,
 	vio.status = le64_to_cpu(nvme_req(rq)->result.u64);
 	vio.result = rq->errors;
 
-	if (vio.data_len) {
-		blk_rq_unmap_user(bio);
-		bdput(bio->bi_bdev);
-	}
-
 	copy_to_user(uvio, &vio, sizeof(vio));
 err_map:
-	if (bio) {
+	if (vio.data_len) {
 		bdput(bio->bi_bdev);
 		blk_rq_unmap_user(bio);
 	}
