@@ -598,6 +598,8 @@ static int nvme_nvm_user_vio(struct nvme_ns *ns,
 	struct bio *bio = NULL;
 	__le64 *ppa_list;
 	dma_addr_t ppa_dma;
+	__le64 *metadata;
+	dma_addr_t metadata_dma;
 	int ret = 0;
 
 	if (copy_from_user(&vio, uvio, sizeof(vio)))
@@ -605,23 +607,15 @@ static int nvme_nvm_user_vio(struct nvme_ns *ns,
 	if (vio.flags)
 		return -EINVAL;
 
-	if (vio.nppas) {
-		ppa_list = dma_pool_alloc(dev->dma_pool, GFP_KERNEL,
-								&ppa_dma);
-		if (!ppa_list)
-			return -ENOMEM;
-		if (copy_from_user(ppa_list, (void __user *)vio.ppas,
-					sizeof(u64) * (vio.nppas + 1))) {
-			ret = -EFAULT;
-			goto err_ppa_list;
-		}
-	}
-
 	cmd = kzalloc(sizeof(struct nvme_nvm_command), GFP_KERNEL);
 	if (!cmd) {
-		ret = -ENOMEM;
-		goto err_ppa_list;
+		return -ENOMEM;
 	}
+
+	cmd->ph_rw.opcode = vio.opcode;
+	cmd->ph_rw.nsid = cpu_to_le32(ns->ns_id);
+	cmd->ph_rw.control = cpu_to_le16(vio.control);
+	cmd->ph_rw.length = cpu_to_le16(vio.nppas);
 
 	rq = nvme_alloc_request(q, (struct nvme_command *)cmd, 0, NVME_QID_ANY);
 	if (IS_ERR(rq)) {
@@ -630,13 +624,48 @@ static int nvme_nvm_user_vio(struct nvme_ns *ns,
 	}
 
 	rq->cmd_flags &= ~REQ_FAILFAST_DRIVER;
+	rq->end_io_data = &wait;
+
+	if (vio.nppas) {
+		ppa_list = dma_pool_alloc(dev->dma_pool, GFP_KERNEL, &ppa_dma);
+		if (!ppa_list) {
+			ret = -ENOMEM;
+			goto err_rq;
+		}
+		if (copy_from_user(ppa_list, (void __user *)vio.ppas,
+					sizeof(u64) * (vio.nppas + 1))) {
+			ret = -EFAULT;
+			goto err_ppa;
+		}
+
+		cmd->ph_rw.spba = cpu_to_le64(ppa_dma);
+	} else {
+		cmd->ph_rw.spba = cpu_to_le64(vio.ppas);
+	}
+
+	if (vio.metadata_len) {
+		metadata = dma_pool_alloc(dev->dma_pool, GFP_KERNEL,
+								&metadata_dma);
+		if (!metadata) {
+			ret = -ENOMEM;
+			goto err_ppa;
+		}
+		if ((vio.opcode == NVM_OP_PWRITE) &&
+			copy_from_user(metadata, (void __user *)vio.metadata,
+							vio.metadata_len)) {
+			ret = -EFAULT;
+			goto err_meta;
+		}
+
+		cmd->ph_rw.metadata = cpu_to_le64(metadata_dma);
+	}
 
 	if (vio.data_len) {
 		if (blk_rq_map_user(q, rq, NULL,
-				    (void __user *)(uintptr_t)vio.addr,
-				    vio.data_len, GFP_KERNEL)) {
+					(void __user *)(uintptr_t)vio.addr,
+						vio.data_len, GFP_KERNEL)) {
 			ret = -ENOMEM;
-			goto err_rq;
+			goto err_meta;
 		}
 		bio = rq->bio;
 
@@ -646,18 +675,6 @@ static int nvme_nvm_user_vio(struct nvme_ns *ns,
 			goto err_map;
 		}
 	}
-
-	if (vio.nppas)
-		cmd->ph_rw.spba = cpu_to_le64(ppa_dma);
-	else
-		cmd->ph_rw.spba = cpu_to_le64(vio.ppas);
-
-	cmd->ph_rw.opcode = vio.opcode;
-	cmd->ph_rw.nsid = cpu_to_le32(ns->ns_id);
-	cmd->ph_rw.control = cpu_to_le16(vio.control);
-	cmd->ph_rw.length = cpu_to_le16(vio.nppas);
-
-	rq->end_io_data = &wait;
 
 	blk_execute_rq_nowait(q, NULL, rq, 0, nvme_nvm_end_user_vio);
 
@@ -672,19 +689,32 @@ static int nvme_nvm_user_vio(struct nvme_ns *ns,
 	vio.status = le64_to_cpu(nvme_req(rq)->result.u64);
 	vio.result = rq->errors;
 
-	copy_to_user(uvio, &vio, sizeof(vio));
+	if (copy_to_user(uvio, &vio, sizeof(vio))) {
+		ret = -EFAULT;
+		goto err_map;
+	}
+
+	if ((vio.metadata_len) && (vio.opcode == NVM_OP_PREAD) &&
+		copy_to_user((void __user *)vio.metadata, (void *)metadata,
+							vio.metadata_len)) {
+		ret = -EFAULT;
+	}
 err_map:
 	if (vio.data_len) {
 		bdput(bio->bi_bdev);
 		blk_rq_unmap_user(bio);
 	}
+err_meta:
+	if (vio.metadata_len) {
+		dma_pool_free(dev->dma_pool, metadata, metadata_dma);
+	}
+err_ppa:
+	if (vio.nppas)
+		dma_pool_free(dev->dma_pool, ppa_list, ppa_dma);
 err_rq:
 	blk_mq_free_request(rq);
 err_cmd:
 	kfree(cmd);
-err_ppa_list:
-	if (vio.nppas)
-		dma_pool_free(dev->dma_pool, ppa_list, ppa_dma);
 	return ret;
 }
 
