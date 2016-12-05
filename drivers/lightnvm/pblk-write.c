@@ -502,7 +502,6 @@ out:
 
 void pblk_end_io_write(struct pblk *pblk, struct nvm_rq *rqd)
 {
-	struct nvm_tgt_dev *dev = pblk->dev;
 	struct pblk_ctx *ctx;
 
 	if (rqd->error) {
