@@ -1043,11 +1043,6 @@ static int nvm_init(struct nvm_dev *dev)
 	pr_debug("nvm: ver:%x nvm_vendor:%x\n",
 			dev->identity.ver_id, dev->identity.vmnt);
 
-	if (dev->identity.ver_id != 1) {
-		pr_err("nvm: device not supported by kernel.");
-		goto err;
-	}
-
 	ret = nvm_core_init(dev);
 	if (ret) {
 		pr_err("nvm: could not initialize core structures.\n");

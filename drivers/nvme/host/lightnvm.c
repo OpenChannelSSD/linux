@@ -214,6 +214,46 @@ struct nvme_nvm_id {
 	struct nvme_nvm_id_group groups[4];
 } __packed;
 
+struct nvme_nvm_geo13 {
+	__le16			num_ch;
+	__le16			num_lun;
+	__le32			num_chnks;
+	__le32			clba;
+	__le32			csecs;
+	__le32			sos;
+	__u8			resv[44];
+};
+
+struct nvme_nvm_wrt13 {
+	__le32			mw_min;
+	__le32			mw_opt;
+	__le32			mw_cunits;
+	__u8			resv[52];
+};
+
+struct nvme_nvm_perf13 {
+	__le32			trdt;
+	__le32			trdm;
+	__le32			tprt;
+	__le32			tprm;
+	__le32			tbet;
+	__le32			tbem;
+	__u8			resv[40];
+};
+
+struct nvme_nvm_id13 {
+	__u8			ver_id;
+	__u8			resv[3];
+	__u8			lbaf[8];
+	struct nvme_nvm_addr_format ppaf;
+	__le32			resv2[1];
+	__le32			mccap;
+	__le32			resv3[7];
+	struct nvme_nvm_geo13	geo;
+	struct nvme_nvm_wrt13	wrt;
+	struct nvme_nvm_perf13	perf;
+} __packed;
+
 struct nvme_nvm_bb_tbl {
 	__u8	tblid[4];
 	__le16	verid;
@@ -297,6 +337,54 @@ static int init_grps(struct nvm_id *nvm_id, struct nvme_nvm_id *nvme_nvm_id)
 	return 0;
 }
 
+static int nvme_nvm_identity12(struct nvm_id *nvm_id,
+		struct nvme_nvm_id *nvme_nvm_id)
+{
+	nvm_id->vmnt = nvme_nvm_id->vmnt;
+	nvm_id->cap = le32_to_cpu(nvme_nvm_id->cap);
+	nvm_id->dom = le32_to_cpu(nvme_nvm_id->dom);
+	memcpy(&nvm_id->ppaf, &nvme_nvm_id->ppaf,
+					sizeof(struct nvm_addr_format));
+
+	return init_grps(nvm_id, nvme_nvm_id);
+}
+
+static int nvme_nvm_identity13(struct nvm_id *nvm_id,
+		struct nvme_nvm_id *nvme_nvm_id)
+{
+	struct nvme_nvm_id13 *id = (struct nvme_nvm_id13 *)nvme_nvm_id;
+	struct nvm_id_group *grp = &nvm_id->grp;
+
+	memcpy(&nvm_id->ppaf, &id->ppaf, sizeof(struct nvme_nvm_addr_format));
+
+	grp->num_ch = le16_to_cpu(id->geo.num_ch);;
+	grp->num_lun = le16_to_cpu(id->geo.num_lun);
+	grp->num_blk = le32_to_cpu(id->geo.num_chnks);
+
+	grp->csecs = le32_to_cpu(id->geo.csecs);
+	grp->sos = le32_to_cpu(id->geo.sos);
+
+	grp->trdt = le32_to_cpu(id->perf.trdt);
+	grp->trdm = le32_to_cpu(id->perf.trdm);
+	grp->tprt = le32_to_cpu(id->perf.tprt);
+	grp->tprm = le32_to_cpu(id->perf.tprm);
+	grp->tbet = le32_to_cpu(id->perf.tbet);
+	grp->tbem = le32_to_cpu(id->perf.tbem);
+	/* Only suspension enable/disable is defined.
+	 * Suspension is on bit 0 in 1.3, while in 1.2 it is on bit 1. */
+	grp->mccap = (le32_to_cpu(id->mccap) & 0x1) << 1;
+
+	/* revision 1.2 target compatibility */
+	grp->num_pln = (1 << nvm_id->ppaf.pln_len);
+	grp->num_pg = (1 << nvm_id->ppaf.pg_len);
+	grp->fpg_sz = (1 << nvm_id->ppaf.sect_len) * grp->csecs;
+	if (grp->num_pln == 2)
+		grp->mpos = 0x020202;
+	else if (grp->num_pln == 4)
+		grp->mpos = 0x040404;
+	return 0;
+}
+
 static int nvme_nvm_identity(struct nvm_dev *nvmdev, struct nvm_id *nvm_id)
 {
 	struct nvme_ns *ns = nvmdev->q->queuedata;
@@ -320,13 +408,21 @@ static int nvme_nvm_identity(struct nvm_dev *nvmdev, struct nvm_id *nvm_id)
 	}
 
 	nvm_id->ver_id = nvme_nvm_id->ver_id;
-	nvm_id->vmnt = nvme_nvm_id->vmnt;
-	nvm_id->cap = le32_to_cpu(nvme_nvm_id->cap);
-	nvm_id->dom = le32_to_cpu(nvme_nvm_id->dom);
-	memcpy(&nvm_id->ppaf, &nvme_nvm_id->ppaf,
-					sizeof(struct nvm_addr_format));
 
-	ret = init_grps(nvm_id, nvme_nvm_id);
+	switch (nvm_id->ver_id) {
+	case 1:
+		ret = nvme_nvm_identity12(nvm_id, nvme_nvm_id);
+		break;
+	case 2:
+		ret = nvme_nvm_identity13(nvm_id, nvme_nvm_id);
+		break;
+	default:
+		dev_err(ns->ctrl->device,
+				"Not supported OCSSD revision (%d)\n",
+				nvm_id->ver_id);
+		ret = -EINVAL;
+		break;
+	}
 out:
 	kfree(nvme_nvm_id);
 	return ret;
