@@ -251,7 +251,7 @@ struct pblk_blk_rec_lpg *pblk_alloc_blk_meta(struct pblk *pblk,
 	if (pblk_recov_calc_meta_len(pblk, &bitmap_len, &rlpg_len, &req_len))
 		goto out;
 
-	rlpg = mempool_alloc(pblk->blk_meta_pool, GFP_KERNEL);
+	rlpg = mempool_alloc(pblk->blk_meta_pool, GFP_ATOMIC);
 	if (!rlpg)
 		goto out;
 	memset(rlpg, 0, req_len);
