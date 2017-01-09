@@ -241,10 +241,10 @@ static int pblk_fill_partial_read_bio(struct pblk *pblk, struct bio *bio,
 			src_p + src_bv.bv_offset,
 			PBLK_EXPOSED_PAGE_SIZE);
 
-		mempool_free(src_p, pblk->page_pool);
-
 		kunmap_atomic(src_p);
 		kunmap_atomic(dst_p);
+
+		mempool_free(src_bv.bv_page, pblk->page_pool);
 
 		i++;
 		hole = find_next_zero_bit(read_bitmap, nr_secs, hole + 1);
