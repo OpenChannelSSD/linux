@@ -617,35 +617,6 @@ int nvm_submit_io(struct nvm_tgt_dev *tgt_dev, struct nvm_rq *rqd)
 }
 EXPORT_SYMBOL(nvm_submit_io);
 
-int nvm_erase_blk(struct nvm_tgt_dev *tgt_dev, struct ppa_addr *ppas, int flags)
-{
-	struct nvm_dev *dev = tgt_dev->parent;
-	struct nvm_rq rqd;
-	int ret;
-
-	if (!dev->ops->erase_block)
-		return 0;
-
-	nvm_map_to_dev(tgt_dev, ppas);
-
-	memset(&rqd, 0, sizeof(struct nvm_rq));
-
-	ret = nvm_set_rqd_ppalist(dev, &rqd, ppas, 1, 1);
-	if (ret)
-		return ret;
-
-	nvm_rq_tgt_to_dev(tgt_dev, &rqd);
-
-	rqd.flags = flags;
-
-	ret = dev->ops->erase_block(dev, &rqd);
-
-	nvm_free_rqd_ppalist(dev, &rqd);
-
-	return ret;
-}
-EXPORT_SYMBOL(nvm_erase_blk);
-
 int nvm_get_l2p_tbl(struct nvm_tgt_dev *tgt_dev, u64 slba, u32 nlb,
 		    nvm_l2p_update_fn *update_l2p, void *priv)
 {

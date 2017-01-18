@@ -13,6 +13,9 @@ enum {
 
 	NVM_IOTYPE_NONE = 0,
 	NVM_IOTYPE_GC = 1,
+
+	NVM_COMMAND_SYNC = 0,
+	NVM_COMMAND_ASYNC = 1,
 };
 
 #define NVM_BLK_BITS (16)
@@ -56,7 +59,6 @@ typedef int (nvm_get_l2p_tbl_fn)(struct nvm_dev *, u64, u32,
 typedef int (nvm_op_bb_tbl_fn)(struct nvm_dev *, struct ppa_addr, u8 *);
 typedef int (nvm_op_set_bb_fn)(struct nvm_dev *, struct ppa_addr *, int, int);
 typedef int (nvm_submit_io_fn)(struct nvm_dev *, struct nvm_rq *);
-typedef int (nvm_erase_blk_fn)(struct nvm_dev *, struct nvm_rq *);
 typedef void *(nvm_create_dma_pool_fn)(struct nvm_dev *, char *);
 typedef void (nvm_destroy_dma_pool_fn)(void *);
 typedef void *(nvm_dev_dma_alloc_fn)(struct nvm_dev *, void *, gfp_t,
@@ -70,7 +72,6 @@ struct nvm_dev_ops {
 	nvm_op_set_bb_fn	*set_bb_tbl;
 
 	nvm_submit_io_fn	*submit_io;
-	nvm_erase_blk_fn	*erase_block;
 
 	nvm_create_dma_pool_fn	*create_dma_pool;
 	nvm_destroy_dma_pool_fn	*destroy_dma_pool;
@@ -475,7 +476,6 @@ extern int nvm_submit_io(struct nvm_tgt_dev *, struct nvm_rq *);
 extern int nvm_set_rqd_ppalist(struct nvm_dev *, struct nvm_rq *,
 					const struct ppa_addr *, int, int);
 extern void nvm_free_rqd_ppalist(struct nvm_dev *, struct nvm_rq *);
-extern int nvm_erase_blk(struct nvm_tgt_dev *, struct ppa_addr *, int);
 extern int nvm_get_l2p_tbl(struct nvm_tgt_dev *, u64, u32, nvm_l2p_update_fn *,
 			   void *);
 extern int nvm_get_area(struct nvm_tgt_dev *, sector_t *, sector_t);
