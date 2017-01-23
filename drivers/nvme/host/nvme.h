@@ -156,6 +156,7 @@ struct nvme_ctrl {
 	struct nvme_id_power_state psd[32];
 	struct work_struct scan_work;
 	struct work_struct async_event_work;
+	struct work_struct vendor_async_event_work;
 	struct delayed_work ka_work;
 
 	/* Power saving configuration */
@@ -314,6 +315,7 @@ int nvme_set_features(struct nvme_ctrl *dev, unsigned fid, unsigned dword11,
 int nvme_set_queue_count(struct nvme_ctrl *ctrl, int *count);
 void nvme_start_keep_alive(struct nvme_ctrl *ctrl);
 void nvme_stop_keep_alive(struct nvme_ctrl *ctrl);
+void nvme_vendor_async_event_work(struct work_struct *);
 
 struct sg_io_hdr;
 

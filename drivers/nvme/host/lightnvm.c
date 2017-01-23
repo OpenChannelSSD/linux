@@ -887,6 +887,61 @@ int nvme_nvm_ioctl(struct nvme_ns *ns, unsigned int cmd, unsigned long arg)
 	}
 }
 
+void nvm_print_log_page(struct nvme_ocssd_log *log)
+{
+	pr_info("cnt(%llu), ppa(0x%llx), nsid(%u), st(0x%05x), msk(0x%03x)\n",
+		log->notification_count, log->ppa_addr, log->nsid, log->state,
+		log->lba_mask);
+}
+
+void nvme_vendor_async_event_work(struct work_struct *work)
+{
+	struct nvme_ctrl *ctrl =
+		container_of(work, struct nvme_ctrl, vendor_async_event_work);
+	struct nvme_ns *iter, *ns = NULL;
+	struct nvm_dev *nvmdev;
+	struct nvme_command c = {};
+	struct nvme_ocssd_log log;
+	struct nvm_log_page log_page;
+	int ret;
+
+	c.common.opcode = nvme_admin_get_log_page;
+	c.common.cdw10[0] = cpu_to_le32(
+			(((sizeof(struct nvme_ocssd_log) / 4) - 1) << 16) |
+			 0xd0);
+
+	memset(&log, 0, sizeof(struct nvme_ocssd_log));
+
+	ret = nvme_submit_sync_cmd(ctrl->admin_q, &c, &log,
+						sizeof(struct nvme_ocssd_log));
+	if (ret)
+		return;
+
+	log_page.ppa.ppa = log.ppa_addr;
+	log_page.scope = log.lba_mask & NVM_LOGPAGE_STATE_MASK;
+	log_page.severity = log.state & NVM_LOGPAGE_SEVERITY_MASK;
+
+	mutex_lock(&ctrl->namespaces_mutex);
+	list_for_each_entry(iter, &ctrl->namespaces, list) {
+		if (iter->ns_id == log.nsid) {
+			ns = iter;
+			break;
+		}
+	}
+	mutex_unlock(&ctrl->namespaces_mutex);
+
+	if (!ns)
+		return;
+
+	nvmdev = ns->ndev;
+
+#ifdef CONFIG_NVM_DEBUG
+	nvm_print_log_page(&log);
+#endif
+
+	nvm_notify_log_page(nvmdev, log_page);
+}
+
 int nvme_nvm_register(struct nvme_ns *ns, char *disk_name, int node)
 {
 	struct request_queue *q = ns->queue;

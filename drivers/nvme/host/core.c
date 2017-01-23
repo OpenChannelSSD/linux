@@ -2248,6 +2248,9 @@ void nvme_complete_async_event(struct nvme_ctrl *ctrl, __le16 status,
 	default:
 		dev_warn(ctrl->device, "async event result %08x\n", result);
 	}
+
+	if (result & 0xd00007)
+		schedule_work(&ctrl->vendor_async_event_work);
 }
 EXPORT_SYMBOL_GPL(nvme_complete_async_event);
 
@@ -2290,6 +2293,7 @@ static void nvme_release_instance(struct nvme_ctrl *ctrl)
 void nvme_uninit_ctrl(struct nvme_ctrl *ctrl)
 {
 	flush_work(&ctrl->async_event_work);
+	flush_work(&ctrl->vendor_async_event_work);
 	flush_work(&ctrl->scan_work);
 	nvme_remove_namespaces(ctrl);
 
@@ -2338,6 +2342,7 @@ int nvme_init_ctrl(struct nvme_ctrl *ctrl, struct device *dev,
 	ctrl->quirks = quirks;
 	INIT_WORK(&ctrl->scan_work, nvme_scan_work);
 	INIT_WORK(&ctrl->async_event_work, nvme_async_event_work);
+	INIT_WORK(&ctrl->vendor_async_event_work, nvme_vendor_async_event_work);
 
 	ret = nvme_set_instance(ctrl);
 	if (ret)

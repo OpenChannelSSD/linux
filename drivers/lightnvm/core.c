@@ -1071,6 +1071,28 @@ struct nvm_dev *nvm_alloc_dev(int node)
 }
 EXPORT_SYMBOL(nvm_alloc_dev);
 
+void nvm_notify_log_page(struct nvm_dev *dev, struct nvm_log_page log_page)
+{
+	struct nvm_target *t;
+	struct nvm_tgt_type *tt;
+	struct nvm_tgt_dev *tgt_dev;
+	int lunid;
+
+	log_page.ppa = dev_to_generic_addr(&dev->geo, log_page.ppa);
+	lunid = log_page.ppa.g.ch * dev->geo.luns_per_chnl + log_page.ppa.g.lun;
+
+	t = dev->lun_map[lunid];
+	if (!t)
+		return;
+
+	tt = t->type;
+	tgt_dev = t->dev;
+	nvm_map_to_tgt(tgt_dev, &log_page.ppa);
+
+	tt->notify_log_page(t->disk->private_data, log_page);
+}
+EXPORT_SYMBOL(nvm_notify_log_page);
+
 int nvm_register(struct nvm_dev *dev)
 {
 	int ret;

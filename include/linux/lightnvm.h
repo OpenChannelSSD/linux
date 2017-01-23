@@ -44,6 +44,41 @@ struct ppa_addr {
 	};
 };
 
+enum {
+	/* valid bit mask */
+	NVM_LOGPAGE_STATE_MASK		= 0x3,
+	NVM_LOGPAGE_SEVERITY_MASK	= 0x5,
+
+	/* scope */
+	NVM_LOGPAGE_SCOPE_SECTOR	= 1,
+	NVM_LOGPAGE_SCOPE_CHUNK		= 2,
+	NVM_LOGPAGE_SCOPE_LUN		= 4,
+
+	/* severity */
+	NVM_LOGPAGE_SEVERITY_LOW	= 1,
+	NVM_LOGPAGE_SEVERITY_MID	= 2,
+	NVM_LOGPAGE_SEVERITY_HIGH	= 4,
+	NVM_LOGPAGE_SEVERITY_UNREC	= 8,
+	NVM_LOGPAGE_SEVERITY_DEV	= 16,
+};
+
+struct nvme_ocssd_log {
+	u64	notification_count;
+	u64	ppa_addr;
+	u32	nsid;
+	u16	state			:5;
+	u16	rsvd_state		:11;
+	u8	lba_mask		:3;
+	u8	lba_state		:5;
+	u8	rsvd_23_63[41];
+};
+
+struct nvm_log_page {
+	struct ppa_addr ppa;
+	u16 scope;
+	u8 severity;
+};
+
 struct nvm_rq;
 struct nvm_id;
 struct nvm_dev;
@@ -439,6 +474,7 @@ typedef void *(nvm_tgt_init_fn)(struct nvm_tgt_dev *, struct gendisk *,
 typedef void (nvm_tgt_exit_fn)(void *);
 typedef int (nvm_tgt_sysfs_init_fn)(struct gendisk *);
 typedef void (nvm_tgt_sysfs_exit_fn)(struct gendisk *);
+typedef void (nvm_tgt_notify_log_page)(void *, struct nvm_log_page);
 
 struct nvm_tgt_type {
 	const char *name;
@@ -455,6 +491,9 @@ struct nvm_tgt_type {
 	/* sysfs */
 	nvm_tgt_sysfs_init_fn *sysfs_init;
 	nvm_tgt_sysfs_exit_fn *sysfs_exit;
+
+	/* log page */
+	nvm_tgt_notify_log_page *notify_log_page;
 
 	/* For internal use */
 	struct list_head list;
@@ -487,6 +526,7 @@ extern void nvm_put_area(struct nvm_tgt_dev *, sector_t);
 extern void nvm_end_io(struct nvm_rq *);
 extern int nvm_bb_tbl_fold(struct nvm_dev *, u8 *, int);
 extern int nvm_get_tgt_bb_tbl(struct nvm_tgt_dev *, struct ppa_addr, u8 *);
+void nvm_notify_log_page(struct nvm_dev *dev, struct nvm_log_page log_page);
 
 extern int nvm_dev_factory(struct nvm_dev *, int flags);
 
