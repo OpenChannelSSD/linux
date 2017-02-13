@@ -484,6 +484,248 @@ void pblk_gc_sysfs_force(struct pblk *pblk, int force)
 	spin_unlock(&gc->lock);
 }
 
+static void pblk_gc_log_page_sector(struct pblk *pblk,
+				    struct nvm_log_page log_page)
+{
+	struct nvm_tgt_dev *dev = pblk->dev;
+	struct nvm_geo *geo = &dev->geo;
+	struct bio *bio;
+	struct pblk_sec_meta *meta_list;
+	struct pblk_line *line;
+	struct nvm_rq rqd;
+	dma_addr_t dma_meta_list;
+	void *data;
+	u64 lba;
+	int ret;
+	DECLARE_COMPLETION_ONSTACK(wait);
+
+	meta_list = nvm_dev_dma_alloc(dev->parent, GFP_KERNEL, &dma_meta_list);
+	if (!meta_list)
+		return;
+
+	data = kcalloc(pblk->max_write_pgs, geo->sec_size, GFP_KERNEL);
+	if (!data)
+		goto free_meta_list;
+
+	bio = bio_map_kern(dev->q, data, geo->sec_size, GFP_KERNEL);
+	if (IS_ERR(bio))
+		goto out;
+
+	memset(&rqd, 0, sizeof(struct nvm_rq));
+
+	bio->bi_iter.bi_sector = 0; /* artificial bio */
+	bio_set_op_attrs(bio, REQ_OP_READ, 0);
+	bio->bi_private = &wait;
+	bio->bi_end_io = pblk_end_bio_sync;
+
+	rqd.bio = bio;
+	rqd.opcode = NVM_OP_PREAD;
+	rqd.flags = pblk_set_read_mode(pblk);
+	rqd.meta_list = meta_list;
+	rqd.nr_ppas = 1;
+	rqd.ppa_addr = log_page.ppa;
+	rqd.dma_meta_list = dma_meta_list;
+	rqd.end_io = NULL;
+
+	ret = pblk_submit_io(pblk, &rqd);
+	if (ret) {
+		pr_err("pblk: recovery I/O submission failed: %d\n", ret);
+		bio_put(bio);
+		goto out;
+	}
+	wait_for_completion_io(&wait);
+	bio_put(bio);
+
+	if (rqd.error) {
+		pr_err("pblk: page log read error: %d\n", rqd.error);
+		goto out;
+	}
+
+	lba = meta_list[0].lba;
+	if (lba > pblk->rl.nr_secs) {
+		pr_err("pblk: corrupted P2L map - LBA:%llu", lba);
+#ifdef CONFIG_NVM_DEBUG
+		print_ppa(&log_page.ppa, "BAD PPA", 0);
+#endif
+		goto out;
+	}
+
+	line = &pblk->lines[pblk_dev_ppa_to_line(log_page.ppa)];
+
+	/* L2P is updated as a normal GC write */
+	if (pblk_write_gc_to_cache(pblk, data, &lba, 1, 1, line,
+							PBLK_IOTYPE_GC)) {
+		pr_err("pblk: could not recover log page\n");
+#ifdef CONFIG_NVM_DEBUG
+		print_ppa(&log_page.ppa, "UNREC. LOGPAGE", log_page.scope);
+#endif
+	}
+
+#ifdef CONFIG_PBLK_AER_DEBUG
+	printk(KERN_CRIT "sector (ppa %llx) put in cache\n", log_page.ppa.ppa);
+#endif
+
+out:
+	kfree(data);
+free_meta_list:
+	nvm_dev_dma_free(dev->parent, meta_list, dma_meta_list);
+}
+
+static void pblk_gc_log_page_block(struct pblk *pblk,
+				   struct nvm_log_page log_page)
+{
+	struct nvm_tgt_dev *dev = pblk->dev;
+	struct nvm_geo *geo = &dev->geo;
+	struct ppa_addr bppa = log_page.ppa;
+	struct bio *bio;
+	struct ppa_addr *ppa_list;
+	struct pblk_sec_meta *meta_list;
+	struct pblk_line *line;
+	struct nvm_rq rqd;
+	struct ppa_addr ppa;
+	void *data;
+	dma_addr_t dma_meta_list;
+	dma_addr_t dma_ppa_list;
+	u64 *lba_list;
+	int i, j, k, recov_pgs = 0;
+	int rq_ppas, rq_len;
+	int ret;
+	DECLARE_COMPLETION_ONSTACK(wait);
+
+	ppa_list = nvm_dev_dma_alloc(dev->parent, GFP_KERNEL, &dma_ppa_list);
+	if (!ppa_list)
+		return;
+
+	meta_list = nvm_dev_dma_alloc(dev->parent, GFP_KERNEL, &dma_meta_list);
+	if (!meta_list)
+		goto free_ppa_list;
+
+	lba_list = kcalloc(pblk->max_write_pgs, sizeof(u64), GFP_KERNEL);
+	if (!lba_list)
+		goto free_meta_list;
+
+	data = kcalloc(pblk->max_write_pgs, geo->sec_size, GFP_KERNEL);
+	if (!data)
+		goto free_lba_list;
+
+next_rq:
+	memset(&rqd, 0, sizeof(struct nvm_rq));
+
+	rq_ppas = pblk->max_write_pgs;
+	rq_len = rq_ppas * geo->sec_size;
+
+	bio = bio_map_kern(dev->q, data, rq_len, GFP_KERNEL);
+	if (IS_ERR(bio))
+		goto free_data;
+
+	bio->bi_iter.bi_sector = 0; /* artificial bio */
+	bio_set_op_attrs(bio, REQ_OP_READ, 0);
+	bio->bi_private = &wait;
+	bio->bi_end_io = pblk_end_bio_sync;
+
+	rqd.bio = bio;
+	rqd.opcode = NVM_OP_PREAD;
+	rqd.flags = pblk_set_progr_mode(pblk, READ);
+	rqd.flags |= NVM_IO_SUSPEND | NVM_IO_SCRAMBLE_ENABLE;
+	rqd.nr_ppas = rq_ppas;
+	rqd.meta_list = meta_list;
+	rqd.ppa_list = ppa_list;
+	rqd.dma_ppa_list = dma_ppa_list;
+	rqd.dma_meta_list = dma_meta_list;
+	rqd.end_io = NULL;
+
+	for (i = 0; i < rqd.nr_ppas; ) {
+		ppa = bppa;
+		ppa.g.pg = recov_pgs++;
+
+		for (j = 0; j < geo->nr_planes; j++) {
+			ppa.g.pl = j;
+
+			for (k = 0; k < geo->sec_per_pg; k++) {
+				ppa.g.sec = k;
+				rqd.ppa_list[i++] = ppa;
+			}
+		}
+	}
+
+	ret = pblk_submit_io(pblk, &rqd);
+	if (ret) {
+		pr_err("pblk: recovery I/O submission failed: %d\n", ret);
+		bio_put(bio);
+		goto free_data;
+	}
+	wait_for_completion_io(&wait);
+
+	if (rqd.error) {
+		pr_err("pblk: page log read error: %d\n", rqd.error);
+		goto out;
+	}
+
+	for (i = 0; i < rqd.nr_ppas; i++) {
+		u64 lba = lba_list[i] = meta_list[i].lba;
+
+		if (lba > pblk->rl.nr_secs) {
+			pr_err("pblk: corrupted P2L map - LBA:%llu", lba);
+#ifdef CONFIG_NVM_DEBUG
+			print_ppa(&log_page.ppa, "BAD PPA", 0);
+#endif
+			goto out;
+		}
+	}
+
+	line = &pblk->lines[pblk_dev_ppa_to_line(log_page.ppa)];
+
+	/* L2P updates since the event are handled by the write buffer */
+	if (pblk_write_gc_to_cache(pblk, data, lba_list, rqd.nr_ppas,
+					rqd.nr_ppas, line, PBLK_IOTYPE_GC)) {
+		pr_err("pblk: could not recover log page\n");
+#ifdef CONFIG_NVM_DEBUG
+		print_ppa(&log_page.ppa, "UNREC. LOGPAGE", log_page.scope);
+#endif
+	}
+
+out:
+	bio_put(bio);
+	if (recov_pgs < geo->pgs_per_blk)
+		goto next_rq;
+
+#ifdef CONFIG_PBLK_AER_DEBUG
+	printk(KERN_CRIT "block (ppa %llx) put in cache\n", log_page.ppa.ppa);
+#endif
+
+free_data:
+	kfree(data);
+free_lba_list:
+	kfree(lba_list);
+free_meta_list:
+	nvm_dev_dma_free(dev->parent, meta_list, dma_meta_list);
+free_ppa_list:
+	nvm_dev_dma_free(dev->parent, ppa_list, dma_ppa_list);
+}
+
+/* If a LUN fails, reads will not succeed. Another form for redundancy is
+ * necessary to cover this case.
+ */
+static void pblk_gc_log_page_lun(struct pblk *pblk,
+				 struct nvm_log_page log_page)
+{
+	pr_err("pblk: unrecoverable LUN failure: ch:%d, lun:%d\n",
+					log_page.ppa.g.ch,
+					log_page.ppa.g.lun);
+}
+
+void pblk_gc_log_page(struct pblk *pblk, struct nvm_log_page log_page)
+{
+	if (log_page.scope & NVM_LOGPAGE_SCOPE_SECTOR)
+		pblk_gc_log_page_sector(pblk, log_page);
+	else if (log_page.scope & NVM_LOGPAGE_SCOPE_CHUNK)
+		pblk_gc_log_page_block(pblk, log_page);
+	else if (log_page.scope & NVM_LOGPAGE_SCOPE_LUN)
+		pblk_gc_log_page_lun(pblk, log_page);
+	else
+		pr_err("pblk: unknown log page error (0x%x\n)", log_page.scope);
+}
+
 int pblk_gc_init(struct pblk *pblk)
 {
 	struct pblk_gc *gc = &pblk->gc;

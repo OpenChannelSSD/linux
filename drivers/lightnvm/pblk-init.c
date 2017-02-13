@@ -927,19 +927,34 @@ fail:
 	return ERR_PTR(ret);
 }
 
+static void pblk_notify_log_page(void *private, struct nvm_log_page log_page)
+{
+	struct pblk *pblk = private;
+
+#ifdef CONFIG_PBLK_AER_DEBUG
+	printk(KERN_CRIT "pblk: catch log page: scope:%d, severity:%d\n",
+					log_page.scope, log_page.severity);
+	print_ppa(&log_page.ppa, "LOG PPA", log_page.ppa.ppa);
+#endif
+
+	pblk_gc_log_page(pblk, log_page);
+}
+
 /* physical block device target */
 static struct nvm_tgt_type tt_pblk = {
-	.name		= "pblk",
-	.version	= {1, 0, 0},
+	.name			= "pblk",
+	.version		= {1, 0, 0},
 
-	.make_rq	= pblk_make_rq,
-	.capacity	= pblk_capacity,
+	.make_rq		= pblk_make_rq,
+	.capacity		= pblk_capacity,
 
-	.init		= pblk_init,
-	.exit		= pblk_exit,
+	.init			= pblk_init,
+	.exit			= pblk_exit,
 
-	.sysfs_init	= pblk_sysfs_init,
-	.sysfs_exit	= pblk_sysfs_exit,
+	.sysfs_init		= pblk_sysfs_init,
+	.sysfs_exit		= pblk_sysfs_exit,
+
+	.notify_log_page	= pblk_notify_log_page,
 };
 
 static int __init pblk_module_init(void)

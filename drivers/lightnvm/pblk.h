@@ -730,6 +730,7 @@ int pblk_gc_status(struct pblk *pblk);
 void pblk_gc_sysfs_state_show(struct pblk *pblk, int *gc_enabled,
 			      int *gc_active);
 void pblk_gc_sysfs_force(struct pblk *pblk, int force);
+void pblk_gc_log_page(struct pblk *pblk, struct nvm_log_page log_page);
 
 /*
  * pblk rate limiter

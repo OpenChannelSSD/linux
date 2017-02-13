@@ -42,4 +42,10 @@ config NVM_PBLK
 
 	Please note the disk format is considered EXPERIMENTAL for now.
 
+config NVM_PBLK_AER_DEBUG
+	bool "Debug for PBLK AER error injection"
+	depends on NVM_PBLK
+	---help---
+	Enables debugging messages on PBLK for AER error injection.
+
 endif # NVM
