@@ -161,16 +161,16 @@ static int pblk_set_ppaf(struct pblk *pblk)
 	pblk->ppaf.lun_offset = pblk->ppaf.ch_offset + ppaf.ch_len;
 	pblk->ppaf.pg_offset = pblk->ppaf.lun_offset + ppaf.lun_len;
 	pblk->ppaf.blk_offset = pblk->ppaf.pg_offset + ppaf.pg_len;
-	pblk->ppaf.sec_mask = (1 << ppaf.sect_len) - 1;
-	pblk->ppaf.pln_mask = ((1 << ppaf.pln_len) - 1) <<
+	pblk->ppaf.sec_mask = (1LL << ppaf.sect_len) - 1;
+	pblk->ppaf.pln_mask = ((1LL << ppaf.pln_len) - 1) <<
 							pblk->ppaf.pln_offset;
-	pblk->ppaf.ch_mask = ((1 << ppaf.ch_len) - 1) <<
+	pblk->ppaf.ch_mask = ((1LL << ppaf.ch_len) - 1) <<
 							pblk->ppaf.ch_offset;
-	pblk->ppaf.lun_mask = ((1 << ppaf.lun_len) -1) <<
+	pblk->ppaf.lun_mask = ((1LL << ppaf.lun_len) -1) <<
 							pblk->ppaf.lun_offset;
-	pblk->ppaf.pg_mask = ((1 << ppaf.pg_len) - 1) <<
+	pblk->ppaf.pg_mask = ((1LL << ppaf.pg_len) - 1) <<
 							pblk->ppaf.pg_offset;
-	pblk->ppaf.blk_mask = ((1 << ppaf.blk_len) - 1) <<
+	pblk->ppaf.blk_mask = ((1LL << ppaf.blk_len) - 1) <<
 							pblk->ppaf.blk_offset;
 
 	return 0;
