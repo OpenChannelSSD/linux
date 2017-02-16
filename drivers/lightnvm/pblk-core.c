@@ -414,6 +414,7 @@ struct bio *pblk_bio_map_addr(struct pblk *pblk, void *data,
 		page = vmalloc_to_page(kaddr);
 		if (!page) {
 			pr_err("pblk: could not map vmalloc emeta\n");
+			bio_put(bio);
 			bio = ERR_PTR(-ENOMEM);
 			goto out;
 		}
@@ -421,6 +422,7 @@ struct bio *pblk_bio_map_addr(struct pblk *pblk, void *data,
 		ret = bio_add_pc_page(dev->q, bio, page, PAGE_SIZE, 0);
 		if (ret != PAGE_SIZE) {
 			pr_err("pblk: could not add page to emeta bio\n");
+			bio_put(bio);
 			bio = ERR_PTR(-ENOMEM);
 			goto out;
 		}
