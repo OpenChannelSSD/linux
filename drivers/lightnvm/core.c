@@ -61,12 +61,12 @@ static struct nvm_target *nvm_find_target(struct nvm_dev *dev, const char *name)
 	return NULL;
 }
 
-static int nvm_reserve_luns(struct nvm_dev *dev, int lun_begin, int lun_end)
+static int nvm_check_luns(struct nvm_dev *dev, int lun_begin, int lun_end)
 {
 	int i;
 
 	for (i = lun_begin; i <= lun_end; i++) {
-		if (test_and_set_bit(i, dev->lun_map)) {
+		if (dev->lun_map[i]) {
 			pr_err("nvm: lun %d already allocated\n", i);
 			goto err;
 		}
@@ -75,9 +75,18 @@ static int nvm_reserve_luns(struct nvm_dev *dev, int lun_begin, int lun_end)
 	return 0;
 err:
 	while (--i > lun_begin)
-		clear_bit(i, dev->lun_map);
+		dev->lun_map[i] = NULL;
 
 	return -EBUSY;
+}
+
+static void nvm_reserve_luns(struct nvm_dev *dev, struct nvm_target *t,
+			     int lun_begin, int lun_end)
+{
+	int i;
+
+	for (i = lun_begin; i <= lun_end; i++)
+		dev->lun_map[i] = t;
 }
 
 static void nvm_release_luns_err(struct nvm_dev *dev, int lun_begin,
@@ -86,7 +95,7 @@ static void nvm_release_luns_err(struct nvm_dev *dev, int lun_begin,
 	int i;
 
 	for (i = lun_begin; i <= lun_end; i++)
-		WARN_ON(!test_and_clear_bit(i, dev->lun_map));
+		dev->lun_map[i] = NULL;
 }
 
 static void nvm_remove_tgt_dev(struct nvm_tgt_dev *tgt_dev, int clear)
@@ -105,8 +114,7 @@ static void nvm_remove_tgt_dev(struct nvm_tgt_dev *tgt_dev, int clear)
 				int lun = j + lun_offs[j];
 				int lunid = (ch * dev->geo.luns_per_chnl) + lun;
 
-				WARN_ON(!test_and_clear_bit(lunid,
-							dev->lun_map));
+				dev->lun_map[lunid] = NULL;
 			}
 		}
 
@@ -250,10 +258,12 @@ static int nvm_create_tgt(struct nvm_dev *dev, struct nvm_ioctl_create *create)
 		mutex_unlock(&dev->mlock);
 		return -EINVAL;
 	}
-	mutex_unlock(&dev->mlock);
 
-	if (nvm_reserve_luns(dev, s->lun_begin, s->lun_end))
+	if (nvm_check_luns(dev, s->lun_begin, s->lun_end)) {
+		mutex_unlock(&dev->mlock);
 		return -ENOMEM;
+	}
+	mutex_unlock(&dev->mlock);
 
 	t = kmalloc(sizeof(struct nvm_target), GFP_KERNEL);
 	if (!t) {
@@ -312,6 +322,7 @@ static int nvm_create_tgt(struct nvm_dev *dev, struct nvm_ioctl_create *create)
 	t->dev = tgt_dev;
 
 	mutex_lock(&dev->mlock);
+	nvm_reserve_luns(dev, t, s->lun_begin, s->lun_end);
 	list_add_tail(&t->list, &dev->targets);
 	mutex_unlock(&dev->mlock);
 
@@ -931,7 +942,7 @@ static int nvm_core_init(struct nvm_dev *dev)
 	struct nvm_id *id = &dev->identity;
 	struct nvm_id_group *grp = &id->grp;
 	struct nvm_geo *geo = &dev->geo;
-	int ret;
+	int i, ret;
 
 	/* Whole device values */
 	geo->nr_chnls = grp->num_ch;
@@ -969,10 +980,12 @@ static int nvm_core_init(struct nvm_dev *dev)
 	geo->nr_luns = geo->luns_per_chnl * geo->nr_chnls;
 
 	dev->total_secs = geo->nr_luns * geo->sec_per_lun;
-	dev->lun_map = kcalloc(BITS_TO_LONGS(geo->nr_luns),
-					sizeof(unsigned long), GFP_KERNEL);
+	dev->lun_map = kcalloc(geo->nr_luns, sizeof(void *), GFP_KERNEL);
 	if (!dev->lun_map)
 		return -ENOMEM;
+
+	for (i = 0; i < geo->nr_luns; i++)
+		dev->lun_map[i] = NULL;
 
 	switch (grp->fmtype) {
 	case NVM_ID_FMTYPE_SLC:

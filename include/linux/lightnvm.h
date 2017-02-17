@@ -323,7 +323,7 @@ struct nvm_dev {
 
 	unsigned long total_secs;
 
-	unsigned long *lun_map;
+	struct nvm_target **lun_map;
 	void *dma_pool;
 
 	struct nvm_id identity;
