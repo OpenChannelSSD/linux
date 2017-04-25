@@ -17,6 +17,8 @@
 #include <linux/cpu.h>
 #include <linux/errno.h>
 #include <linux/sched.h>
+#include <linux/sched/task.h>
+#include <linux/sched/task_stack.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
@@ -49,6 +51,7 @@
 #include <asm/switch_to.h>
 #include <asm/xen/hypervisor.h>
 #include <asm/vdso.h>
+#include <asm/intel_rdt.h>
 
 __visible DEFINE_PER_CPU(unsigned long, rsp_scratch);
 
@@ -475,6 +478,9 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
 		if (ss_sel != __KERNEL_DS)
 			loadsegment(ss, __KERNEL_DS);
 	}
+
+	/* Load the Intel cache allocation PQR MSR. */
+	intel_rdt_sched_in();
 
 	return prev_p;
 }

@@ -31,7 +31,7 @@
 #include <linux/if_arp.h>
 #include <linux/icmp.h>
 #include <linux/slab.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/init.h>
 #include <linux/netfilter_ipv4.h>
 #include <linux/if_ether.h>
@@ -1380,6 +1380,7 @@ static int ipip6_tunnel_init(struct net_device *dev)
 	err = dst_cache_init(&tunnel->dst_cache, GFP_KERNEL);
 	if (err) {
 		free_percpu(dev->tstats);
+		dev->tstats = NULL;
 		return err;
 	}
 

@@ -81,11 +81,7 @@
 #define ICR_ASSERT_ATN		0x02	/* rw Set to assert ATN */
 #define ICR_ASSERT_DATA		0x01	/* rw SCSI_DATA_REG is asserted */
 
-#ifdef DIFFERENTIAL
-#define ICR_BASE		ICR_DIFF_ENABLE
-#else
 #define ICR_BASE		0
-#endif
 
 #define MODE_REG		2
 /*
@@ -102,11 +98,7 @@
 #define MR_DMA_MODE		0x02	/* rw DMA / pseudo DMA mode */
 #define MR_ARBITRATE		0x01	/* rw start arbitration */
 
-#ifdef PARITY
-#define MR_BASE			MR_ENABLE_PAR_CHECK
-#else
 #define MR_BASE			0
-#endif
 
 #define TARGET_COMMAND_REG	3
 #define TCR_LAST_BYTE_SENT	0x80	/* ro DMA done */
@@ -174,11 +166,7 @@
 #define CSR_SCSI_BUF_RDY       0x02	/* ro  SCSI buffer read */
 #define CSR_GATED_53C80_IRQ    0x01	/* ro  Last block xferred */
 
-#if 0
-#define CSR_BASE CSR_SCSI_BUFF_INTR | CSR_53C80_INTR
-#else
 #define CSR_BASE CSR_53C80_INTR
-#endif
 
 /* Note : PHASE_* macros are based on the values of the STATUS register */
 #define PHASE_MASK 	(SR_MSG | SR_CD | SR_IO)
@@ -198,16 +186,6 @@
  */
 
 #define PHASE_SR_TO_TCR(phase) ((phase) >> 2)
-
-/*
- * These are "special" values for the irq and dma_channel fields of the 
- * Scsi_Host structure
- */
-
-#define DMA_NONE	255
-#define IRQ_AUTO	254
-#define DMA_AUTO	254
-#define PORT_AUTO	0xffff	/* autoprobe io port for 53c400a */
 
 #ifndef NO_IRQ
 #define NO_IRQ		0
@@ -244,10 +222,8 @@ struct NCR5380_hostdata {
 	unsigned char id_higher_mask;		/* All bits above id_mask */
 	unsigned char last_message;		/* Last Message Out */
 	unsigned long region_size;		/* Size of address/port range */
-	char info[256];
+	char info[168];				/* Host banner message */
 };
-
-#ifdef __KERNEL__
 
 struct NCR5380_cmd {
 	struct list_head list;
@@ -290,7 +266,6 @@ static void NCR5380_print(struct Scsi_Host *instance);
 #define NCR5380_dprint_phase(flg, arg) do {} while (0)
 #endif
 
-static int NCR5380_probe_irq(struct Scsi_Host *instance, int possible);
 static int NCR5380_init(struct Scsi_Host *instance, int flags);
 static int NCR5380_maybe_reset_bus(struct Scsi_Host *);
 static void NCR5380_exit(struct Scsi_Host *instance);
@@ -342,5 +317,4 @@ static inline int NCR5380_dma_residual_none(struct NCR5380_hostdata *hostdata)
 	return 0;
 }
 
-#endif				/* __KERNEL__ */
 #endif				/* NCR5380_H */

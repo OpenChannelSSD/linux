@@ -186,6 +186,10 @@ static struct test generic_tests[] = {
 		.func = test__thread_map_synthesize,
 	},
 	{
+		.desc = "Remove thread map",
+		.func = test__thread_map_remove,
+	},
+	{
 		.desc = "Synthesize cpu map",
 		.func = test__cpu_map_synthesize,
 	},
@@ -243,6 +247,10 @@ static struct test generic_tests[] = {
 		}
 	},
 	{
+		.desc = "unit_number__scnprintf",
+		.func = test__unit_number__scnprint,
+	},
+	{
 		.func = NULL,
 	},
 };
@@ -291,7 +299,7 @@ static int run_test(struct test *test, int subtest)
 		if (!dont_fork) {
 			pr_debug("test child forked, pid %d\n", getpid());
 
-			if (!verbose) {
+			if (verbose <= 0) {
 				int nullfd = open("/dev/null", O_WRONLY);
 
 				if (nullfd >= 0) {

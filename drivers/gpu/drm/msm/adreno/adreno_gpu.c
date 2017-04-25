@@ -213,7 +213,14 @@ void adreno_submit(struct msm_gpu *gpu, struct msm_gem_submit *submit,
 void adreno_flush(struct msm_gpu *gpu)
 {
 	struct adreno_gpu *adreno_gpu = to_adreno_gpu(gpu);
-	uint32_t wptr = get_wptr(gpu->rb);
+	uint32_t wptr;
+
+	/*
+	 * Mask wptr value that we calculate to fit in the HW range. This is
+	 * to account for the possibility that the last command fit exactly into
+	 * the ringbuffer and rb->next hasn't wrapped to zero yet
+	 */
+	wptr = get_wptr(gpu->rb) & ((gpu->rb->size / 4) - 1);
 
 	/* ensure writes to ringbuffer have hit system memory: */
 	mb();
@@ -338,7 +345,6 @@ int adreno_gpu_init(struct drm_device *drm, struct platform_device *pdev,
 {
 	struct adreno_platform_config *config = pdev->dev.platform_data;
 	struct msm_gpu *gpu = &adreno_gpu->base;
-	struct msm_mmu *mmu;
 	int ret;
 
 	adreno_gpu->funcs = funcs;
@@ -346,7 +352,6 @@ int adreno_gpu_init(struct drm_device *drm, struct platform_device *pdev,
 	adreno_gpu->gmem = adreno_gpu->info->gmem;
 	adreno_gpu->revn = adreno_gpu->info->revn;
 	adreno_gpu->rev = config->rev;
-	adreno_gpu->quirks = config->quirks;
 
 	gpu->fast_rate = config->fast_rate;
 	gpu->slow_rate = config->slow_rate;
@@ -378,8 +383,8 @@ int adreno_gpu_init(struct drm_device *drm, struct platform_device *pdev,
 		return ret;
 	}
 
-	mmu = gpu->aspace->mmu;
-	if (mmu) {
+	if (gpu->aspace && gpu->aspace->mmu) {
+		struct msm_mmu *mmu = gpu->aspace->mmu;
 		ret = mmu->funcs->attach(mmu, iommu_ports,
 				ARRAY_SIZE(iommu_ports));
 		if (ret)
@@ -413,18 +418,27 @@ int adreno_gpu_init(struct drm_device *drm, struct platform_device *pdev,
 	return 0;
 }
 
-void adreno_gpu_cleanup(struct adreno_gpu *gpu)
+void adreno_gpu_cleanup(struct adreno_gpu *adreno_gpu)
 {
-	if (gpu->memptrs_bo) {
-		if (gpu->memptrs)
-			msm_gem_put_vaddr(gpu->memptrs_bo);
+	struct msm_gpu *gpu = &adreno_gpu->base;
 
-		if (gpu->memptrs_iova)
-			msm_gem_put_iova(gpu->memptrs_bo, gpu->base.id);
+	if (adreno_gpu->memptrs_bo) {
+		if (adreno_gpu->memptrs)
+			msm_gem_put_vaddr(adreno_gpu->memptrs_bo);
 
-		drm_gem_object_unreference_unlocked(gpu->memptrs_bo);
+		if (adreno_gpu->memptrs_iova)
+			msm_gem_put_iova(adreno_gpu->memptrs_bo, gpu->id);
+
+		drm_gem_object_unreference_unlocked(adreno_gpu->memptrs_bo);
 	}
-	release_firmware(gpu->pm4);
-	release_firmware(gpu->pfp);
-	msm_gpu_cleanup(&gpu->base);
+	release_firmware(adreno_gpu->pm4);
+	release_firmware(adreno_gpu->pfp);
+
+	msm_gpu_cleanup(gpu);
+
+	if (gpu->aspace) {
+		gpu->aspace->mmu->funcs->detach(gpu->aspace->mmu,
+			iommu_ports, ARRAY_SIZE(iommu_ports));
+		msm_gem_address_space_destroy(gpu->aspace);
+	}
 }

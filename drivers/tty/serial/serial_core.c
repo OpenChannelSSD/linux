@@ -24,6 +24,7 @@
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
 #include <linux/slab.h>
+#include <linux/sched/signal.h>
 #include <linux/init.h>
 #include <linux/console.h>
 #include <linux/of.h>
@@ -36,7 +37,7 @@
 #include <linux/mutex.h>
 
 #include <asm/irq.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 /*
  * This is used to lock changes in serial line configuration.

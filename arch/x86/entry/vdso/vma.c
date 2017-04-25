@@ -7,6 +7,7 @@
 #include <linux/mm.h>
 #include <linux/err.h>
 #include <linux/sched.h>
+#include <linux/sched/task_stack.h>
 #include <linux/slab.h>
 #include <linux/init.h>
 #include <linux/random.h>
@@ -186,7 +187,7 @@ static int map_vdso(const struct vdso_image *image, unsigned long addr)
 
 	if (IS_ERR(vma)) {
 		ret = PTR_ERR(vma);
-		do_munmap(mm, text_start, image->size);
+		do_munmap(mm, text_start, image->size, NULL);
 	} else {
 		current->mm->context.vdso = (void __user *)text_start;
 		current->mm->context.vdso_image = image;
@@ -371,7 +372,7 @@ static int __init init_vdso(void)
 
 	/* notifier priority > KVM */
 	return cpuhp_setup_state(CPUHP_AP_X86_VDSO_VMA_ONLINE,
-				 "AP_X86_VDSO_VMA_ONLINE", vgetcpu_online, NULL);
+				 "x86/vdso/vma:online", vgetcpu_online, NULL);
 }
 subsys_initcall(init_vdso);
 #endif /* CONFIG_X86_64 */

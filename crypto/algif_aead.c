@@ -19,6 +19,7 @@
 #include <linux/init.h>
 #include <linux/list.h>
 #include <linux/kernel.h>
+#include <linux/sched/signal.h>
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/net.h>
@@ -556,18 +557,8 @@ static int aead_recvmsg_sync(struct socket *sock, struct msghdr *msg, int flags)
 	lock_sock(sk);
 
 	/*
-	 * AEAD memory structure: For encryption, the tag is appended to the
-	 * ciphertext which implies that the memory allocated for the ciphertext
-	 * must be increased by the tag length. For decryption, the tag
-	 * is expected to be concatenated to the ciphertext. The plaintext
-	 * therefore has a memory size of the ciphertext minus the tag length.
-	 *
-	 * The memory structure for cipher operation has the following
-	 * structure:
-	 *	AEAD encryption input:  assoc data || plaintext
-	 *	AEAD encryption output: cipherntext || auth tag
-	 *	AEAD decryption input:  assoc data || ciphertext || auth tag
-	 *	AEAD decryption output: plaintext
+	 * Please see documentation of aead_request_set_crypt for the
+	 * description of the AEAD memory structure expected from the caller.
 	 */
 
 	if (ctx->more) {
@@ -671,9 +662,9 @@ static int aead_recvmsg_sync(struct socket *sock, struct msghdr *msg, int flags)
 unlock:
 	list_for_each_entry_safe(rsgl, tmp, &ctx->list, list) {
 		af_alg_free_sg(&rsgl->sgl);
+		list_del(&rsgl->list);
 		if (rsgl != &ctx->first_rsgl)
 			sock_kfree_s(sk, rsgl, sizeof(*rsgl));
-		list_del(&rsgl->list);
 	}
 	INIT_LIST_HEAD(&ctx->list);
 	aead_wmem_wakeup(sk);

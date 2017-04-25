@@ -36,7 +36,7 @@ quiet_cmd_genpdf = GENPDF  $2
       cmd_genpdf = convert $2 $3
 
 quiet_cmd_gendot = DOT     $2
-      cmd_gendot = dot -Tsvg $2 > $3
+      cmd_gendot = dot -Tsvg $2 > $3 || { rm -f $3; exit 1; }
 
 %.pdf: %.svg
 	@$(call cmd,genpdf,$<,$@)
@@ -88,7 +88,7 @@ $(BUILDDIR)/videodev2.h.rst: ${UAPI}/videodev2.h ${PARSER} $(SRC_DIR)/videodev2.
 $(BUILDDIR)/media.h.rst: ${UAPI}/media.h ${PARSER} $(SRC_DIR)/media.h.rst.exceptions
 	@$($(quiet)gen_rst)
 
-$(BUILDDIR)/cec.h.rst: ${KAPI}/cec.h ${PARSER} $(SRC_DIR)/cec.h.rst.exceptions
+$(BUILDDIR)/cec.h.rst: ${UAPI}/cec.h ${PARSER} $(SRC_DIR)/cec.h.rst.exceptions
 	@$($(quiet)gen_rst)
 
 $(BUILDDIR)/lirc.h.rst: ${UAPI}/lirc.h ${PARSER} $(SRC_DIR)/lirc.h.rst.exceptions
@@ -103,6 +103,7 @@ html: all
 epub: all
 xml: all
 latex: $(IMGPDF) all
+linkcheck:
 
 clean:
 	-rm -f $(DOTTGT) $(IMGTGT) ${TARGETS} 2>/dev/null

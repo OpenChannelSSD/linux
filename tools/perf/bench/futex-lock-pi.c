@@ -48,7 +48,7 @@ static const struct option options[] = {
 };
 
 static const char * const bench_futex_lock_pi_usage[] = {
-	"perf bench futex requeue <options>",
+	"perf bench futex lock-pi <options>",
 	NULL
 };
 
@@ -152,7 +152,6 @@ int bench_futex_lock_pi(int argc, const char **argv,
 		goto err;
 
 	ncpus = sysconf(_SC_NPROCESSORS_ONLN);
-	nsecs = futexbench_sanitize_numeric(nsecs);
 
 	sigfillset(&act.sa_mask);
 	act.sa_sigaction = toggle_done;
@@ -160,8 +159,6 @@ int bench_futex_lock_pi(int argc, const char **argv,
 
 	if (!nthreads)
 		nthreads = ncpus;
-	else
-		nthreads = futexbench_sanitize_numeric(nthreads);
 
 	worker = calloc(nthreads, sizeof(*worker));
 	if (!worker)

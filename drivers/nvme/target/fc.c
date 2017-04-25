@@ -1189,8 +1189,8 @@ nvmet_fc_ls_create_association(struct nvmet_fc_tgtport *tgtport,
 			validation_errors[ret]);
 		iod->lsreq->rsplen = nvmet_fc_format_rjt(acc,
 				NVME_FC_MAX_LS_BUFFER_SIZE, rqst->w0.ls_cmd,
-				ELS_RJT_LOGIC,
-				ELS_EXPL_NONE, 0);
+				FCNVME_RJT_RC_LOGIC,
+				FCNVME_RJT_EXP_NONE, 0);
 		return;
 	}
 
@@ -1281,8 +1281,9 @@ nvmet_fc_ls_create_connection(struct nvmet_fc_tgtport *tgtport,
 		iod->lsreq->rsplen = nvmet_fc_format_rjt(acc,
 				NVME_FC_MAX_LS_BUFFER_SIZE, rqst->w0.ls_cmd,
 				(ret == VERR_NO_ASSOC) ?
-						ELS_RJT_PROT : ELS_RJT_LOGIC,
-				ELS_EXPL_NONE, 0);
+					FCNVME_RJT_RC_INV_ASSOC :
+					FCNVME_RJT_RC_LOGIC,
+				FCNVME_RJT_EXP_NONE, 0);
 		return;
 	}
 
@@ -1314,7 +1315,7 @@ nvmet_fc_ls_disconnect(struct nvmet_fc_tgtport *tgtport,
 			(struct fcnvme_ls_disconnect_rqst *)iod->rqstbuf;
 	struct fcnvme_ls_disconnect_acc *acc =
 			(struct fcnvme_ls_disconnect_acc *)iod->rspbuf;
-	struct nvmet_fc_tgt_queue *queue;
+	struct nvmet_fc_tgt_queue *queue = NULL;
 	struct nvmet_fc_tgt_assoc *assoc;
 	int ret = 0;
 	bool del_assoc = false;
@@ -1348,7 +1349,18 @@ nvmet_fc_ls_disconnect(struct nvmet_fc_tgtport *tgtport,
 		assoc = nvmet_fc_find_target_assoc(tgtport,
 				be64_to_cpu(rqst->associd.association_id));
 		iod->assoc = assoc;
-		if (!assoc)
+		if (assoc) {
+			if (rqst->discon_cmd.scope ==
+					FCNVME_DISCONN_CONNECTION) {
+				queue = nvmet_fc_find_target_queue(tgtport,
+						be64_to_cpu(
+							rqst->discon_cmd.id));
+				if (!queue) {
+					nvmet_fc_tgt_a_put(assoc);
+					ret = VERR_NO_CONN;
+				}
+			}
+		} else
 			ret = VERR_NO_ASSOC;
 	}
 
@@ -1358,8 +1370,12 @@ nvmet_fc_ls_disconnect(struct nvmet_fc_tgtport *tgtport,
 			validation_errors[ret]);
 		iod->lsreq->rsplen = nvmet_fc_format_rjt(acc,
 				NVME_FC_MAX_LS_BUFFER_SIZE, rqst->w0.ls_cmd,
-				(ret == 8) ? ELS_RJT_PROT : ELS_RJT_LOGIC,
-				ELS_EXPL_NONE, 0);
+				(ret == VERR_NO_ASSOC) ?
+					FCNVME_RJT_RC_INV_ASSOC :
+					(ret == VERR_NO_CONN) ?
+						FCNVME_RJT_RC_INV_CONN :
+						FCNVME_RJT_RC_LOGIC,
+				FCNVME_RJT_EXP_NONE, 0);
 		return;
 	}
 
@@ -1373,21 +1389,18 @@ nvmet_fc_ls_disconnect(struct nvmet_fc_tgtport *tgtport,
 			FCNVME_LS_DISCONNECT);
 
 
-	if (rqst->discon_cmd.scope == FCNVME_DISCONN_CONNECTION) {
-		queue = nvmet_fc_find_target_queue(tgtport,
-					be64_to_cpu(rqst->discon_cmd.id));
-		if (queue) {
-			int qid = queue->qid;
+	/* are we to delete a Connection ID (queue) */
+	if (queue) {
+		int qid = queue->qid;
 
-			nvmet_fc_delete_target_queue(queue);
+		nvmet_fc_delete_target_queue(queue);
 
-			/* release the get taken by find_target_queue */
-			nvmet_fc_tgt_q_put(queue);
+		/* release the get taken by find_target_queue */
+		nvmet_fc_tgt_q_put(queue);
 
-			/* tear association down if io queue terminated */
-			if (!qid)
-				del_assoc = true;
-		}
+		/* tear association down if io queue terminated */
+		if (!qid)
+			del_assoc = true;
 	}
 
 	/* release get taken in nvmet_fc_find_target_assoc */
@@ -1471,7 +1484,7 @@ nvmet_fc_handle_ls_rqst(struct nvmet_fc_tgtport *tgtport,
 	default:
 		iod->lsreq->rsplen = nvmet_fc_format_rjt(iod->rspbuf,
 				NVME_FC_MAX_LS_BUFFER_SIZE, w0->ls_cmd,
-				ELS_RJT_INVAL, ELS_EXPL_NONE, 0);
+				FCNVME_RJT_RC_INVAL, FCNVME_RJT_EXP_NONE, 0);
 	}
 
 	nvmet_fc_xmt_ls_rsp(tgtport, iod);
@@ -1611,6 +1624,8 @@ nvmet_fc_free_tgt_pgs(struct nvmet_fc_fcp_iod *fod)
 	for_each_sg(fod->data_sg, sg, fod->data_sg_cnt, count)
 		__free_page(sg_page(sg));
 	kfree(fod->data_sg);
+	fod->data_sg = NULL;
+	fod->data_sg_cnt = 0;
 }
 
 
@@ -1809,16 +1824,14 @@ nvmet_fc_xmt_fcp_op_done(struct nvmefc_tgt_fcp_req *fcpreq)
 		/* data no longer needed */
 		nvmet_fc_free_tgt_pgs(fod);
 
-		if (fcpreq->fcp_error || abort)
-			nvmet_req_complete(&fod->req, fcpreq->fcp_error);
-
+		nvmet_req_complete(&fod->req, fcpreq->fcp_error);
 		return;
 	}
 
 	switch (fcpreq->op) {
 
 	case NVMET_FCOP_WRITEDATA:
-		if (abort || fcpreq->fcp_error ||
+		if (fcpreq->fcp_error ||
 		    fcpreq->transferred_length != fcpreq->transfer_length) {
 			nvmet_req_complete(&fod->req,
 					NVME_SC_FC_TRANSPORT_ERROR);
@@ -1841,7 +1854,7 @@ nvmet_fc_xmt_fcp_op_done(struct nvmefc_tgt_fcp_req *fcpreq)
 
 	case NVMET_FCOP_READDATA:
 	case NVMET_FCOP_READDATA_RSP:
-		if (abort || fcpreq->fcp_error ||
+		if (fcpreq->fcp_error ||
 		    fcpreq->transferred_length != fcpreq->transfer_length) {
 			/* data no longer needed */
 			nvmet_fc_free_tgt_pgs(fod);

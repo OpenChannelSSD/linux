@@ -389,7 +389,7 @@ static int blk_integrity_nop_fn(struct blk_integrity_iter *iter)
 	return 0;
 }
 
-static struct blk_integrity_profile nop_profile = {
+static const struct blk_integrity_profile nop_profile = {
 	.name = "nop",
 	.generate_fn = blk_integrity_nop_fn,
 	.verify_fn = blk_integrity_nop_fn,
@@ -443,10 +443,10 @@ void blk_integrity_revalidate(struct gendisk *disk)
 		return;
 
 	if (bi->profile)
-		disk->queue->backing_dev_info.capabilities |=
+		disk->queue->backing_dev_info->capabilities |=
 			BDI_CAP_STABLE_WRITES;
 	else
-		disk->queue->backing_dev_info.capabilities &=
+		disk->queue->backing_dev_info->capabilities &=
 			~BDI_CAP_STABLE_WRITES;
 }
 

@@ -826,16 +826,18 @@ _ctl_do_mpt_command(struct MPT3SAS_ADAPTER *ioc, struct mpt3_ioctl_command karg,
 			"TASK_MGMT: handle(0x%04x), task_type(0x%02x)\n",
 			ioc->name,
 		    le16_to_cpu(tm_request->DevHandle), tm_request->TaskType));
-
+		ioc->got_task_abort_from_ioctl = 1;
 		if (tm_request->TaskType ==
 		    MPI2_SCSITASKMGMT_TASKTYPE_ABORT_TASK ||
 		    tm_request->TaskType ==
 		    MPI2_SCSITASKMGMT_TASKTYPE_QUERY_TASK) {
 			if (_ctl_set_task_mid(ioc, &karg, tm_request)) {
 				mpt3sas_base_free_smid(ioc, smid);
+				ioc->got_task_abort_from_ioctl = 0;
 				goto out;
 			}
 		}
+		ioc->got_task_abort_from_ioctl = 0;
 
 		if (test_bit(device_handle, ioc->device_remove_in_progress)) {
 			dtmprintk(ioc, pr_info(MPT3SAS_FMT
@@ -1923,7 +1925,7 @@ mpt3sas_send_diag_release(struct MPT3SAS_ADAPTER *ioc, u8 buffer_type,
  *
  * This allows ownership of the specified buffer to returned to the driver,
  * allowing an application to read the buffer without fear that firmware is
- * overwritting information in the buffer.
+ * overwriting information in the buffer.
  */
 static long
 _ctl_diag_release(struct MPT3SAS_ADAPTER *ioc, void __user *arg)
@@ -3325,8 +3327,6 @@ static DEVICE_ATTR(diag_trigger_mpi, S_IRUGO | S_IWUSR,
 
 /*********** diagnostic trigger suppport *** END ****************************/
 
-
-
 /*****************************************/
 
 struct device_attribute *mpt3sas_host_attrs[] = {
@@ -3402,9 +3402,50 @@ _ctl_device_handle_show(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR(sas_device_handle, S_IRUGO, _ctl_device_handle_show, NULL);
 
+/**
+ * _ctl_device_ncq_io_prio_show - send prioritized io commands to device
+ * @dev - pointer to embedded device
+ * @buf - the buffer returned
+ *
+ * A sysfs 'read/write' sdev attribute, only works with SATA
+ */
+static ssize_t
+_ctl_device_ncq_prio_enable_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	struct scsi_device *sdev = to_scsi_device(dev);
+	struct MPT3SAS_DEVICE *sas_device_priv_data = sdev->hostdata;
+
+	return snprintf(buf, PAGE_SIZE, "%d\n",
+			sas_device_priv_data->ncq_prio_enable);
+}
+
+static ssize_t
+_ctl_device_ncq_prio_enable_store(struct device *dev,
+				  struct device_attribute *attr,
+				  const char *buf, size_t count)
+{
+	struct scsi_device *sdev = to_scsi_device(dev);
+	struct MPT3SAS_DEVICE *sas_device_priv_data = sdev->hostdata;
+	bool ncq_prio_enable = 0;
+
+	if (kstrtobool(buf, &ncq_prio_enable))
+		return -EINVAL;
+
+	if (!scsih_ncq_prio_supp(sdev))
+		return -EINVAL;
+
+	sas_device_priv_data->ncq_prio_enable = ncq_prio_enable;
+	return strlen(buf);
+}
+static DEVICE_ATTR(sas_ncq_prio_enable, S_IRUGO | S_IWUSR,
+		   _ctl_device_ncq_prio_enable_show,
+		   _ctl_device_ncq_prio_enable_store);
+
 struct device_attribute *mpt3sas_dev_attrs[] = {
 	&dev_attr_sas_address,
 	&dev_attr_sas_device_handle,
+	&dev_attr_sas_ncq_prio_enable,
 	NULL,
 };
 

@@ -19,6 +19,7 @@
 #include <linux/kref.h>
 #include <linux/blk-mq.h>
 #include <linux/lightnvm.h>
+#include <linux/sed-opal.h>
 
 enum {
 	/*
@@ -41,8 +42,6 @@ extern unsigned char shutdown_timeout;
 
 #define NVME_DEFAULT_KATO	5
 #define NVME_KATO_GRACE		10
-
-extern unsigned int nvme_max_retries;
 
 enum {
 	NVME_NS_LBA		= 0,
@@ -67,16 +66,21 @@ enum nvme_quirks {
 	NVME_QUIRK_IDENTIFY_CNS			= (1 << 1),
 
 	/*
-	 * The controller deterministically returns O's on reads to discarded
-	 * logical blocks.
+	 * The controller deterministically returns O's on reads to
+	 * logical blocks that deallocate was called on.
 	 */
-	NVME_QUIRK_DISCARD_ZEROES		= (1 << 2),
+	NVME_QUIRK_DEALLOCATE_ZEROES		= (1 << 2),
 
 	/*
 	 * The controller needs a delay before starts checking the device
 	 * readiness, which is done by reading the NVME_CSTS_RDY bit.
 	 */
 	NVME_QUIRK_DELAY_BEFORE_CHK_RDY		= (1 << 3),
+
+	/*
+	 * APST should not be used.
+	 */
+	NVME_QUIRK_NO_APST			= (1 << 4),
 };
 
 /*
@@ -86,6 +90,7 @@ enum nvme_quirks {
 struct nvme_request {
 	struct nvme_command	*cmd;
 	union nvme_result	result;
+	u8			retries;
 };
 
 static inline struct nvme_request *nvme_req(struct request *req)
@@ -111,6 +116,7 @@ enum nvme_ctrl_state {
 
 struct nvme_ctrl {
 	enum nvme_ctrl_state state;
+	bool identified;
 	spinlock_t lock;
 	const struct nvme_ctrl_ops *ops;
 	struct request_queue *admin_q;
@@ -125,6 +131,8 @@ struct nvme_ctrl {
 	struct list_head node;
 	struct ida ns_ida;
 
+	struct opal_dev *opal_dev;
+
 	char name[12];
 	char serial[20];
 	char model[40];
@@ -135,21 +143,27 @@ struct nvme_ctrl {
 
 	u32 page_size;
 	u32 max_hw_sectors;
-	u32 stripe_size;
 	u16 oncs;
 	u16 vid;
+	u16 oacs;
 	atomic_t abort_limit;
 	u8 event_limit;
 	u8 vwc;
 	u32 vs;
 	u32 sgls;
 	u16 kas;
+	u8 npss;
+	u8 apsta;
 	unsigned int kato;
 	bool subsystem;
 	unsigned long quirks;
+	struct nvme_id_power_state psd[32];
 	struct work_struct scan_work;
 	struct work_struct async_event_work;
 	struct delayed_work ka_work;
+
+	/* Power saving configuration */
+	u64 ps_max_latency_us;
 
 	/* Fabrics only */
 	u16 sqsize;
@@ -226,14 +240,6 @@ static inline u64 nvme_block_nr(struct nvme_ns *ns, sector_t sector)
 	return (sector >> (ns->lba_shift - 9));
 }
 
-static inline unsigned nvme_map_len(struct request *rq)
-{
-	if (req_op(rq) == REQ_OP_DISCARD)
-		return sizeof(struct nvme_dsm_range);
-	else
-		return blk_rq_bytes(rq);
-}
-
 static inline void nvme_cleanup_cmd(struct request *req)
 {
 	if (req->rq_flags & RQF_SPECIAL_PAYLOAD) {
@@ -254,13 +260,7 @@ static inline int nvme_error_status(u16 status)
 	}
 }
 
-static inline bool nvme_req_needs_retry(struct request *req, u16 status)
-{
-	return !(status & NVME_SC_DNR || blk_noretry_request(req)) &&
-		(jiffies - req->start_time) < req->timeout &&
-		req->retries < nvme_max_retries;
-}
-
+void nvme_complete_rq(struct request *req);
 void nvme_cancel_request(struct request *req, void *data, bool reserved);
 bool nvme_change_ctrl_state(struct nvme_ctrl *ctrl,
 		enum nvme_ctrl_state new_state);
@@ -276,6 +276,9 @@ int nvme_init_identify(struct nvme_ctrl *ctrl);
 void nvme_queue_scan(struct nvme_ctrl *ctrl);
 void nvme_remove_namespaces(struct nvme_ctrl *ctrl);
 
+int nvme_sec_submit(void *data, u16 spsp, u8 secp, void *buffer, size_t len,
+		bool send);
+
 #define NVME_NR_AERS	1
 void nvme_complete_async_event(struct nvme_ctrl *ctrl, __le16 status,
 		union nvme_result *res);
@@ -284,11 +287,14 @@ void nvme_queue_async_events(struct nvme_ctrl *ctrl);
 void nvme_stop_queues(struct nvme_ctrl *ctrl);
 void nvme_start_queues(struct nvme_ctrl *ctrl);
 void nvme_kill_queues(struct nvme_ctrl *ctrl);
+void nvme_unfreeze(struct nvme_ctrl *ctrl);
+void nvme_wait_freeze(struct nvme_ctrl *ctrl);
+void nvme_wait_freeze_timeout(struct nvme_ctrl *ctrl, long timeout);
+void nvme_start_freeze(struct nvme_ctrl *ctrl);
 
 #define NVME_QID_ANY -1
 struct request *nvme_alloc_request(struct request_queue *q,
 		struct nvme_command *cmd, unsigned int flags, int qid);
-void nvme_requeue_req(struct request *req);
 int nvme_setup_cmd(struct nvme_ns *ns, struct request *req,
 		struct nvme_command *cmd);
 int nvme_submit_sync_cmd(struct request_queue *q, struct nvme_command *cmd,
@@ -327,6 +333,7 @@ int nvme_nvm_register(struct nvme_ns *ns, char *disk_name, int node);
 void nvme_nvm_unregister(struct nvme_ns *ns);
 int nvme_nvm_register_sysfs(struct nvme_ns *ns);
 void nvme_nvm_unregister_sysfs(struct nvme_ns *ns);
+int nvme_nvm_ioctl(struct nvme_ns *ns, unsigned int cmd, unsigned long arg);
 #else
 static inline int nvme_nvm_register(struct nvme_ns *ns, char *disk_name,
 				    int node)
@@ -343,6 +350,11 @@ static inline void nvme_nvm_unregister_sysfs(struct nvme_ns *ns) {};
 static inline int nvme_nvm_ns_supported(struct nvme_ns *ns, struct nvme_id_ns *id)
 {
 	return 0;
+}
+static inline int nvme_nvm_ioctl(struct nvme_ns *ns, unsigned int cmd,
+							unsigned long arg)
+{
+	return -ENOTTY;
 }
 #endif /* CONFIG_NVM */
 

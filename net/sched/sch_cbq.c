@@ -19,6 +19,7 @@
 #include <linux/skbuff.h>
 #include <net/netlink.h>
 #include <net/pkt_sched.h>
+#include <net/pkt_cls.h>
 
 
 /*	Class-Based Queueing (CBQ) algorithm.
@@ -509,7 +510,7 @@ static enum hrtimer_restart cbq_undelay(struct hrtimer *timer)
 	if (delay) {
 		ktime_t time;
 
-		time = ktime_set(0, 0);
+		time = 0;
 		time = ktime_add_ns(time, PSCHED_TICKS2NS(now + delay));
 		hrtimer_start(&q->delay_timer, time, HRTIMER_MODE_ABS_PINNED);
 	}

@@ -16,8 +16,9 @@
 
 #include <linux/kernel_stat.h>
 #include <linux/errno.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/sched.h>
+#include <linux/sched/clock.h>
 #include <linux/kernel.h>
 #include <linux/param.h>
 #include <linux/string.h>
@@ -38,7 +39,7 @@
 #include <linux/clockchips.h>
 #include <linux/gfp.h>
 #include <linux/kprobes.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/facility.h>
 #include <asm/delay.h>
 #include <asm/div64.h>
@@ -110,7 +111,7 @@ unsigned long long monotonic_clock(void)
 }
 EXPORT_SYMBOL(monotonic_clock);
 
-void tod_to_timeval(__u64 todval, struct timespec64 *xt)
+static void tod_to_timeval(__u64 todval, struct timespec64 *xt)
 {
 	unsigned long long sec;
 
@@ -120,7 +121,6 @@ void tod_to_timeval(__u64 todval, struct timespec64 *xt)
 	todval -= (sec * 1000000) << 12;
 	xt->tv_nsec = ((todval * 1000) >> 12);
 }
-EXPORT_SYMBOL(tod_to_timeval);
 
 void clock_comparator_work(void)
 {
@@ -209,7 +209,7 @@ void read_boot_clock64(struct timespec64 *ts)
 	tod_to_timeval(clock - TOD_UNIX_EPOCH, ts);
 }
 
-static cycle_t read_tod_clock(struct clocksource *cs)
+static u64 read_tod_clock(struct clocksource *cs)
 {
 	unsigned long long now, adj;
 
@@ -492,7 +492,7 @@ static void __init stp_reset(void)
 		pr_warn("The real or virtual hardware system does not provide an STP interface\n");
 		free_page((unsigned long) stp_page);
 		stp_page = NULL;
-		stp_online = 0;
+		stp_online = false;
 	}
 }
 
