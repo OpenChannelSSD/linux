@@ -235,7 +235,7 @@ static int nvm_create_tgt(struct nvm_dev *dev, struct nvm_ioctl_create *create)
 	struct nvm_target *t;
 	struct nvm_tgt_dev *tgt_dev;
 	void *targetdata;
-	int ret;
+	int ret = 0;
 
 	tt = nvm_find_target_type(create->tgttype, 1);
 	if (!tt) {
@@ -252,8 +252,9 @@ static int nvm_create_tgt(struct nvm_dev *dev, struct nvm_ioctl_create *create)
 	}
 	mutex_unlock(&dev->mlock);
 
-	if (nvm_reserve_luns(dev, s->lun_begin, s->lun_end))
-		return -ENOMEM;
+	ret = nvm_reserve_luns(dev, s->lun_begin, s->lun_end);
+	if (ret)
+		goto err;
 
 	t = kmalloc(sizeof(struct nvm_target), GFP_KERNEL);
 	if (!t) {
@@ -314,8 +315,8 @@ static int nvm_create_tgt(struct nvm_dev *dev, struct nvm_ioctl_create *create)
 	mutex_lock(&dev->mlock);
 	list_add_tail(&t->list, &dev->targets);
 	mutex_unlock(&dev->mlock);
-
-	return 0;
+err:
+	return ret;
 err_sysfs:
 	if (tt->exit)
 		tt->exit(targetdata);
