@@ -49,7 +49,7 @@ static unsigned long pblk_end_w_bio(struct pblk *pblk, struct nvm_rq *rqd,
 	nvm_dev_dma_free(dev->parent, rqd->meta_list, rqd->dma_meta_list);
 
 	bio_put(rqd->bio);
-	pblk_free_rqd(pblk, rqd, WRITE);
+	pblk_free_rqd(pblk, rqd, PBLK_WRITE);
 
 	return ret;
 }
@@ -198,7 +198,7 @@ static void pblk_end_io_write_meta(struct nvm_rq *rqd)
 						GFP_ATOMIC, pblk->close_wq);
 
 	nvm_dev_dma_free(dev->parent, rqd->meta_list, rqd->dma_meta_list);
-	pblk_free_rqd(pblk, rqd, READ);
+	pblk_free_rqd(pblk, rqd, PBLK_WRITE_INT);
 
 	atomic_dec(&pblk->inflight_io);
 }
@@ -212,7 +212,7 @@ static int pblk_alloc_w_rq(struct pblk *pblk, struct nvm_rq *rqd,
 	/* Setup write request */
 	rqd->opcode = NVM_OP_PWRITE;
 	rqd->nr_ppas = nr_secs;
-	rqd->flags = pblk_set_progr_mode(pblk, WRITE);
+	rqd->flags = pblk_set_progr_mode(pblk, PBLK_WRITE);
 	rqd->private = pblk;
 	rqd->end_io = end_io;
 
@@ -278,7 +278,7 @@ int pblk_setup_w_rec_rq(struct pblk *pblk, struct nvm_rq *rqd,
 	pblk_map_rq(pblk, rqd, c_ctx->sentry, lun_bitmap, c_ctx->nr_valid, 0);
 
 	rqd->ppa_status = (u64)0;
-	rqd->flags = pblk_set_progr_mode(pblk, WRITE);
+	rqd->flags = pblk_set_progr_mode(pblk, PBLK_WRITE);
 
 	return ret;
 }
@@ -369,7 +369,7 @@ int pblk_submit_meta_io(struct pblk *pblk, struct pblk_line *meta_line)
 	int i, j;
 	int ret;
 
-	rqd = pblk_alloc_rqd(pblk, READ);
+	rqd = pblk_alloc_rqd(pblk, PBLK_WRITE_INT);
 
 	m_ctx = nvm_rq_to_pdu(rqd);
 	m_ctx->private = meta_line;
@@ -427,7 +427,7 @@ fail_rollback:
 fail_free_bio:
 	bio_put(bio);
 fail_free_rqd:
-	pblk_free_rqd(pblk, rqd, READ);
+	pblk_free_rqd(pblk, rqd, PBLK_WRITE_INT);
 	return ret;
 }
 
@@ -551,7 +551,7 @@ static int pblk_submit_write(struct pblk *pblk)
 	bio->bi_iter.bi_sector = 0; /* internal bio */
 	bio_set_op_attrs(bio, REQ_OP_WRITE, 0);
 
-	rqd = pblk_alloc_rqd(pblk, WRITE);
+	rqd = pblk_alloc_rqd(pblk, PBLK_WRITE);
 	rqd->bio = bio;
 
 	if (pblk_rb_read_to_bio(&pblk->rwb, rqd, pos, secs_to_sync,
@@ -573,7 +573,7 @@ fail_free_bio:
 	pblk_free_write_rqd(pblk, rqd);
 fail_put_bio:
 	bio_put(bio);
-	pblk_free_rqd(pblk, rqd, WRITE);
+	pblk_free_rqd(pblk, rqd, PBLK_WRITE);
 
 	return 1;
 }
