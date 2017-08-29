@@ -25,13 +25,20 @@ static unsigned long pblk_end_w_bio(struct pblk *pblk, struct nvm_rq *rqd,
 	unsigned long ret;
 	int i;
 
-	for (i = 0; i < c_ctx->nr_valid; i++) {
+	i = 0;
+	do {
 		struct pblk_w_ctx *w_ctx;
 
 		w_ctx = pblk_rb_w_ctx(&pblk->rwb, c_ctx->sentry + i);
 		while ((original_bio = bio_list_pop(&w_ctx->bios)))
 			bio_endio(original_bio);
-	}
+
+		i++;
+	} while (i < c_ctx->nr_valid);
+
+	if (c_ctx->nr_padded)
+		pblk_bio_free_pages(pblk, rqd->bio, c_ctx->nr_valid,
+							c_ctx->nr_padded);
 
 #ifdef CONFIG_NVM_DEBUG
 	atomic_long_add(c_ctx->nr_valid, &pblk->sync_writes);
@@ -521,7 +528,8 @@ static void pblk_free_write_rqd(struct pblk *pblk, struct nvm_rq *rqd)
 	struct bio *bio = rqd->bio;
 
 	if (c_ctx->nr_padded)
-		pblk_bio_free_pages(pblk, bio, rqd->nr_ppas, c_ctx->nr_padded);
+		pblk_bio_free_pages(pblk, bio, c_ctx->nr_valid,
+							c_ctx->nr_padded);
 }
 
 static int pblk_submit_write(struct pblk *pblk)
