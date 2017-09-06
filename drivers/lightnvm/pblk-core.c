@@ -165,6 +165,8 @@ struct nvm_rq *pblk_alloc_rqd(struct pblk *pblk, int rw)
 	}
 
 	rqd = mempool_alloc(pool, GFP_KERNEL);
+	if (!rqd)
+		return NULL;
 	memset(rqd, 0, rq_size);
 
 	return rqd;
@@ -1478,6 +1480,8 @@ int pblk_blk_erase_async(struct pblk *pblk, struct ppa_addr ppa)
 	int err;
 
 	rqd = mempool_alloc(pblk->g_rq_pool, GFP_KERNEL);
+	if (!rqd)
+		return -ENOMEM;
 	memset(rqd, 0, pblk_g_rq_size);
 
 	pblk_setup_e_rq(pblk, rqd, ppa);
