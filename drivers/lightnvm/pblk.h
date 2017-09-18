@@ -470,9 +470,7 @@ struct pblk_line_mgmt {
 	struct list_head gc_full_list;	/* Full lines ready to GC, no valid */
 	struct list_head gc_empty_list;	/* Full lines close, all valid */
 
-	struct pblk_line *log_line;	/* Current FTL log line */
 	struct pblk_line *data_line;	/* Current data line */
-	struct pblk_line *log_next;	/* Next FTL log line */
 	struct pblk_line *data_next;	/* Next data line */
 
 	struct list_head close_list;	/* Lines queued to be closed */
@@ -492,7 +490,6 @@ struct pblk_line_mgmt {
 	unsigned long *bb_aux;
 
 	unsigned long d_seq_nr;		/* Data line unique sequence number */
-	unsigned long l_seq_nr;		/* Log line unique sequence number */
 
 	spinlock_t free_lock;
 	spinlock_t close_lock;
@@ -717,7 +714,7 @@ struct bio *pblk_bio_map_addr(struct pblk *pblk, void *data,
 			      unsigned int nr_secs, unsigned int len,
 			      int alloc_type, gfp_t gfp_mask);
 struct pblk_line *pblk_line_get(struct pblk *pblk);
-struct pblk_line *pblk_line_get_first_data(struct pblk *pblk);
+struct pblk_line *pblk_line_get_first(struct pblk *pblk);
 struct pblk_line *pblk_line_replace_data(struct pblk *pblk);
 int pblk_line_recov_alloc(struct pblk *pblk, struct pblk_line *line);
 void pblk_line_recov_close(struct pblk *pblk, struct pblk_line *line);

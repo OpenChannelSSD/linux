@@ -1263,7 +1263,7 @@ static void pblk_set_space_limit(struct pblk *pblk)
 	atomic_set(&rl->rb_space, 0);
 }
 
-struct pblk_line *pblk_line_get_first_data(struct pblk *pblk)
+struct pblk_line *pblk_line_get_first(struct pblk *pblk)
 {
 	struct pblk_line_mgmt *l_mg = &pblk->l_mg;
 	struct pblk_line *line;
