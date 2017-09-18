@@ -665,7 +665,7 @@ static int pblk_lines_init(struct pblk *pblk)
 	}
 
 	l_mg->nr_lines = geo->blks_per_lun;
-	l_mg->data_line = NULL;
+	l_mg->next_line = l_mg->cur_line = NULL;
 	l_mg->d_seq_nr = 0;
 	l_mg->nr_free_lines = 0;
 	bitmap_zero(&l_mg->meta_bitmap, PBLK_DATA_LINES);
@@ -757,8 +757,10 @@ add_emeta_page:
 	l_mg->gc_lists[2] = &l_mg->gc_low_list;
 
 	spin_lock_init(&l_mg->free_lock);
-	spin_lock_init(&l_mg->close_lock);
 	spin_lock_init(&l_mg->gc_lock);
+	spin_lock_init(&l_mg->close_lock);
+	spin_lock_init(&l_mg->meta_lock);
+	spin_lock_init(&l_mg->line_lock);
 
 	pblk->lines = kcalloc(l_mg->nr_lines, sizeof(struct pblk_line),
 								GFP_KERNEL);

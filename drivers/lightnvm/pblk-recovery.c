@@ -834,12 +834,11 @@ struct pblk_line *pblk_recov_l2p(struct pblk *pblk)
 	struct nvm_geo *geo = &dev->geo;
 	struct pblk_line_meta *lm = &pblk->lm;
 	struct pblk_line_mgmt *l_mg = &pblk->l_mg;
-	struct pblk_line *line, *tline, *data_line = NULL;
+	struct pblk_line *line, *tline, *cur_line = NULL;
 	struct pblk_smeta *smeta;
 	struct pblk_emeta *emeta;
 	struct line_smeta *smeta_buf;
 	int found_lines = 0, recovered_lines = 0, open_lines = 0;
-	int is_next = 0;
 	int meta_line;
 	int i, valid_uuid = 0;
 	LIST_HEAD(recov_list);
@@ -847,13 +846,13 @@ struct pblk_line *pblk_recov_l2p(struct pblk *pblk)
 	/* TODO: Implement FTL snapshot */
 
 	/* Scan recovery - takes place when FTL snapshot fails */
-	spin_lock(&l_mg->free_lock);
+	spin_lock(&l_mg->meta_lock);
 	meta_line = find_first_zero_bit(&l_mg->meta_bitmap, PBLK_DATA_LINES);
 	set_bit(meta_line, &l_mg->meta_bitmap);
 	smeta = l_mg->sline_meta[meta_line];
 	emeta = l_mg->eline_meta[meta_line];
 	smeta_buf = (struct line_smeta *)smeta;
-	spin_unlock(&l_mg->free_lock);
+	spin_unlock(&l_mg->meta_lock);
 
 	/* Order data lines using their sequence number */
 	for (i = 0; i < l_mg->nr_lines; i++) {
@@ -907,7 +906,12 @@ struct pblk_line *pblk_recov_l2p(struct pblk *pblk)
 		if (line->seq_nr >= l_mg->d_seq_nr)
 			l_mg->d_seq_nr = line->seq_nr + 1;
 		l_mg->nr_free_lines--;
+		list_del(&line->list);
 		spin_unlock(&l_mg->free_lock);
+
+		spin_lock(&l_mg->line_lock);
+		l_mg->cur_line = line;
+		spin_unlock(&l_mg->line_lock);
 
 		if (pblk_line_recov_alloc(pblk, line))
 			goto out;
@@ -921,10 +925,10 @@ struct pblk_line *pblk_recov_l2p(struct pblk *pblk)
 	if (!found_lines) {
 		pblk_setup_uuid(pblk);
 
-		spin_lock(&l_mg->free_lock);
+		spin_lock(&l_mg->meta_lock);
 		WARN_ON_ONCE(!test_and_clear_bit(meta_line,
 							&l_mg->meta_bitmap));
-		spin_unlock(&l_mg->free_lock);
+		spin_unlock(&l_mg->meta_lock);
 
 		goto out;
 	}
@@ -974,29 +978,21 @@ next:
 
 			open_lines++;
 			line->meta_line = meta_line;
-			data_line = line;
+			cur_line = line;
 		}
 	}
 
-	spin_lock(&l_mg->free_lock);
 	if (!open_lines) {
+		spin_lock(&l_mg->meta_lock);
 		WARN_ON_ONCE(!test_and_clear_bit(meta_line,
 							&l_mg->meta_bitmap));
+		spin_unlock(&l_mg->meta_lock);
 		pblk_line_replace_data(pblk);
 	} else {
 		/* Allocate next line for preparation */
-		l_mg->data_next = pblk_line_get(pblk);
-		if (l_mg->data_next) {
-			l_mg->data_next->seq_nr = l_mg->d_seq_nr++;
-			l_mg->data_next->type = PBLK_LINETYPE_DATA;
-			is_next = 1;
-		}
-	}
-	spin_unlock(&l_mg->free_lock);
-
-	if (is_next) {
-		pblk_line_erase(pblk, l_mg->data_next);
-		pblk_rl_free_lines_dec(&pblk->rl, l_mg->data_next);
+		l_mg->next_line = pblk_line_get(pblk, 1);
+		if (!l_mg->next_line)
+			return NULL;
 	}
 
 out:
@@ -1004,7 +1000,7 @@ out:
 		pr_err("pblk: failed to recover all found lines %d/%d\n",
 						found_lines, recovered_lines);
 
-	return data_line;
+	return cur_line;
 }
 
 /*
@@ -1012,15 +1008,13 @@ out:
  */
 int pblk_recov_pad(struct pblk *pblk)
 {
-	struct pblk_line *line;
-	struct pblk_line_mgmt *l_mg = &pblk->l_mg;
+	struct pblk_line *line = pblk_line_get_cur(pblk);
 	int left_msecs;
 	int ret = 0;
 
-	spin_lock(&l_mg->free_lock);
-	line = l_mg->data_line;
+	spin_lock(&line->lock);
 	left_msecs = line->left_msecs;
-	spin_unlock(&l_mg->free_lock);
+	spin_unlock(&line->lock);
 
 	ret = pblk_recov_pad_oob(pblk, line, left_msecs);
 	if (ret) {

@@ -226,7 +226,6 @@ static int pblk_setup_w_rq(struct pblk *pblk, struct nvm_rq *rqd,
 			   struct ppa_addr *erase_ppa)
 {
 	struct pblk_line_meta *lm = &pblk->lm;
-	struct pblk_line *e_line = pblk_line_get_erase(pblk);
 	struct pblk_c_ctx *c_ctx = nvm_rq_to_pdu(rqd);
 	unsigned int valid = c_ctx->nr_valid;
 	unsigned int padded = c_ctx->nr_padded;
@@ -245,10 +244,7 @@ static int pblk_setup_w_rq(struct pblk *pblk, struct nvm_rq *rqd,
 		return ret;
 	}
 
-	if (likely(!e_line || !atomic_read(&e_line->left_eblks)))
-		pblk_map_rq(pblk, rqd, c_ctx->sentry, lun_bitmap, valid, 0);
-	else
-		pblk_map_erase_rq(pblk, rqd, c_ctx->sentry, lun_bitmap,
+	pblk_map_erase_rq(pblk, rqd, c_ctx->sentry, lun_bitmap,
 							valid, erase_ppa);
 
 	return 0;
@@ -383,7 +379,7 @@ static inline bool pblk_valid_meta_ppa(struct pblk *pblk,
 	struct nvm_tgt_dev *dev = pblk->dev;
 	struct nvm_geo *geo = &dev->geo;
 	struct pblk_c_ctx *data_c_ctx = nvm_rq_to_pdu(data_rqd);
-	struct pblk_line *data_line = pblk_line_get_data(pblk);
+	struct pblk_line *cur_line = __pblk_line_get_cur(pblk);
 	struct ppa_addr ppa, ppa_opt;
 	u64 paddr;
 	int pos_opt;
@@ -399,15 +395,15 @@ static inline bool pblk_valid_meta_ppa(struct pblk *pblk,
 	 */
 	paddr = pblk_lookup_page(pblk, meta_line);
 	ppa = addr_to_gen_ppa(pblk, paddr, 0);
-	ppa_opt = addr_to_gen_ppa(pblk, paddr + data_line->meta_distance, 0);
+	ppa_opt = addr_to_gen_ppa(pblk, paddr + cur_line->meta_distance, 0);
 	pos_opt = pblk_ppa_to_pos(geo, ppa_opt);
 
 	if (test_bit(pos_opt, data_c_ctx->lun_bitmap) ||
-				test_bit(pos_opt, data_line->blk_bitmap))
+				test_bit(pos_opt, cur_line->blk_bitmap))
 		return true;
 
 	if (unlikely(pblk_ppa_comp(ppa_opt, ppa)))
-		data_line->meta_distance--;
+		cur_line->meta_distance--;
 
 	return false;
 }
@@ -463,14 +459,15 @@ static int pblk_submit_io_set(struct pblk *pblk, struct nvm_rq *rqd)
 	if (!ppa_empty(erase_ppa)) {
 		/* Submit erase for next data line */
 		if (pblk_blk_erase_async(pblk, erase_ppa)) {
-			struct pblk_line *e_line = pblk_line_get_erase(pblk);
+			int line_id = pblk_ppa_to_line(erase_ppa);
+			struct pblk_line *line = &pblk->lines[line_id];
 			struct nvm_tgt_dev *dev = pblk->dev;
 			struct nvm_geo *geo = &dev->geo;
 			int bit;
 
-			atomic_inc(&e_line->left_eblks);
+			atomic_inc(&line->left_eblks);
 			bit = pblk_ppa_to_pos(geo, erase_ppa);
-			WARN_ON(!test_and_clear_bit(bit, e_line->erase_bitmap));
+			WARN_ON(!test_and_clear_bit(bit, line->erase_bitmap));
 		}
 	}
 

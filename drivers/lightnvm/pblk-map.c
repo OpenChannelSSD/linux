@@ -18,13 +18,14 @@
 
 #include "pblk.h"
 
-static void pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
-			       struct ppa_addr *ppa_list,
-			       unsigned long *lun_bitmap,
-			       struct pblk_sec_meta *meta_list,
-			       unsigned int valid_secs)
+static struct pblk_line *pblk_map_page_data(struct pblk *pblk,
+					    unsigned int sentry,
+					    struct ppa_addr *ppa_list,
+					    unsigned long *lun_bitmap,
+					    struct pblk_sec_meta *meta_list,
+					    unsigned int valid_secs)
 {
-	struct pblk_line *line = pblk_line_get_data(pblk);
+	struct pblk_line *line;
 	struct pblk_emeta *emeta;
 	struct pblk_w_ctx *w_ctx;
 	__le64 *lba_list;
@@ -32,6 +33,7 @@ static void pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 	int nr_secs = pblk->min_write_pgs;
 	int i;
 
+	line = __pblk_line_get_cur(pblk);
 	if (pblk_line_is_full(line)) {
 		struct pblk_line *prev_line = line;
 
@@ -71,11 +73,13 @@ static void pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 	}
 
 	pblk_down_rq(pblk, ppa_list, nr_secs, lun_bitmap);
+
+	return line;
 }
 
-void pblk_map_rq(struct pblk *pblk, struct nvm_rq *rqd, unsigned int sentry,
-		 unsigned long *lun_bitmap, unsigned int valid_secs,
-		 unsigned int off)
+void pblk_map_rq(struct pblk *pblk, struct nvm_rq *rqd,
+		 unsigned int sentry, unsigned long *lun_bitmap,
+		 unsigned int valid_secs, unsigned int off)
 {
 	struct pblk_sec_meta *meta_list = rqd->meta_list;
 	unsigned int map_secs;
@@ -98,73 +102,70 @@ void pblk_map_erase_rq(struct pblk *pblk, struct nvm_rq *rqd,
 	struct nvm_geo *geo = &dev->geo;
 	struct pblk_line_meta *lm = &pblk->lm;
 	struct pblk_sec_meta *meta_list = rqd->meta_list;
-	struct pblk_line *e_line, *d_line;
+	struct pblk_line *cur_line = __pblk_line_get_cur(pblk);
+	struct pblk_line *next_line;
 	unsigned int map_secs;
 	int min = pblk->min_write_pgs;
 	int i, erase_lun;
 
 	for (i = 0; i < rqd->nr_ppas; i += min) {
 		map_secs = (i + min > valid_secs) ? (valid_secs % min) : min;
-		pblk_map_page_data(pblk, sentry + i, &rqd->ppa_list[i],
-					lun_bitmap, &meta_list[i], map_secs);
+		cur_line = pblk_map_page_data(pblk, sentry + i,
+					&rqd->ppa_list[i], lun_bitmap,
+					&meta_list[i], map_secs);
 
 		erase_lun = pblk_ppa_to_pos(geo, rqd->ppa_list[i]);
+
+		next_line = __pblk_line_get_next(pblk);
+		if (!next_line || !atomic_read(&next_line->left_eblks))
+			return pblk_map_rq(pblk, rqd, sentry, lun_bitmap,
+							valid_secs, i + min);
+
+		spin_lock(&next_line->lock);
+		if (!test_bit(erase_lun, next_line->erase_bitmap)) {
+			set_bit(erase_lun, next_line->erase_bitmap);
+			atomic_dec(&next_line->left_eblks);
+
+			*erase_ppa = rqd->ppa_list[i];
+			erase_ppa->g.blk = next_line->id;
+
+			spin_unlock(&next_line->lock);
+
+			/* Avoid evaluating next_line->left_eblks */
+			return pblk_map_rq(pblk, rqd, sentry, lun_bitmap,
+							valid_secs, i + min);
+		}
+		spin_unlock(&next_line->lock);
+	}
+
+	/* Erase blocks that are bad in this line but might not be in next */
+	if (unlikely(ppa_empty(*erase_ppa)) &&
+			bitmap_weight(cur_line->blk_bitmap, lm->blk_per_line)) {
+		int bit = -1;
 
 		/* line can change after page map. We might also be writing the
 		 * last line.
 		 */
-		e_line = pblk_line_get_erase(pblk);
-		if (!e_line)
-			return pblk_map_rq(pblk, rqd, sentry, lun_bitmap,
-							valid_secs, i + min);
-
-		spin_lock(&e_line->lock);
-		if (!test_bit(erase_lun, e_line->erase_bitmap)) {
-			set_bit(erase_lun, e_line->erase_bitmap);
-			atomic_dec(&e_line->left_eblks);
-
-			*erase_ppa = rqd->ppa_list[i];
-			erase_ppa->g.blk = e_line->id;
-
-			spin_unlock(&e_line->lock);
-
-			/* Avoid evaluating e_line->left_eblks */
-			return pblk_map_rq(pblk, rqd, sentry, lun_bitmap,
-							valid_secs, i + min);
-		}
-		spin_unlock(&e_line->lock);
-	}
-
-	d_line = pblk_line_get_data(pblk);
-
-	/* line can change after page map. We might also be writing the
-	 * last line.
-	 */
-	e_line = pblk_line_get_erase(pblk);
-	if (!e_line)
-		return;
-
-	/* Erase blocks that are bad in this line but might not be in next */
-	if (unlikely(ppa_empty(*erase_ppa)) &&
-			bitmap_weight(d_line->blk_bitmap, lm->blk_per_line)) {
-		int bit = -1;
+		next_line = __pblk_line_get_next(pblk);
+		if (!next_line)
+			return;
 
 retry:
-		bit = find_next_bit(d_line->blk_bitmap,
+		bit = find_next_bit(cur_line->blk_bitmap,
 						lm->blk_per_line, bit + 1);
 		if (bit >= lm->blk_per_line)
 			return;
 
-		spin_lock(&e_line->lock);
-		if (test_bit(bit, e_line->erase_bitmap)) {
-			spin_unlock(&e_line->lock);
+		spin_lock(&next_line->lock);
+		if (test_bit(bit, next_line->erase_bitmap)) {
+			spin_unlock(&next_line->lock);
 			goto retry;
 		}
-		spin_unlock(&e_line->lock);
+		spin_unlock(&next_line->lock);
 
-		set_bit(bit, e_line->erase_bitmap);
-		atomic_dec(&e_line->left_eblks);
+		set_bit(bit, next_line->erase_bitmap);
+		atomic_dec(&next_line->left_eblks);
 		*erase_ppa = pblk->luns[bit].bppa; /* set ch and lun */
-		erase_ppa->g.blk = e_line->id;
+		erase_ppa->g.blk = next_line->id;
 	}
 }

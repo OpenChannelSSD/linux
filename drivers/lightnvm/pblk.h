@@ -460,20 +460,24 @@ struct pblk_line_mgmt {
 	struct list_head free_list;	/* Full lines ready to use */
 	struct list_head corrupt_list;	/* Full lines corrupted */
 	struct list_head bad_list;	/* Full lines bad */
+	spinlock_t free_lock;
 
 	/* GC lists - use gc_lock */
 	struct list_head *gc_lists[PBLK_GC_NR_LISTS];
 	struct list_head gc_high_list;	/* Full lines ready to GC, high isc */
 	struct list_head gc_mid_list;	/* Full lines ready to GC, mid isc */
 	struct list_head gc_low_list;	/* Full lines ready to GC, low isc */
+	spinlock_t gc_lock;
 
 	struct list_head gc_full_list;	/* Full lines ready to GC, no valid */
 	struct list_head gc_empty_list;	/* Full lines close, all valid */
 
-	struct pblk_line *data_line;	/* Current data line */
-	struct pblk_line *data_next;	/* Next data line */
+	struct pblk_line *next_line;	/* Next data line */
+	struct pblk_line *cur_line;	/* Current data line */
+	spinlock_t line_lock;
 
 	struct list_head close_list;	/* Lines queued to be closed */
+	spinlock_t close_lock;
 
 	__le32 *vsc_list;		/* Valid sector counts for all lines */
 
@@ -484,16 +488,13 @@ struct pblk_line_mgmt {
 	struct pblk_smeta *sline_meta[PBLK_DATA_LINES];
 	struct pblk_emeta *eline_meta[PBLK_DATA_LINES];
 	unsigned long meta_bitmap;
+	spinlock_t meta_lock;
 
 	/* Helpers for fast bitmap calculations */
 	unsigned long *bb_template;
 	unsigned long *bb_aux;
 
 	unsigned long d_seq_nr;		/* Data line unique sequence number */
-
-	spinlock_t free_lock;
-	spinlock_t close_lock;
-	spinlock_t gc_lock;
 };
 
 struct pblk_line_meta {
@@ -713,13 +714,11 @@ int pblk_submit_meta_io(struct pblk *pblk, struct pblk_line *meta_line);
 struct bio *pblk_bio_map_addr(struct pblk *pblk, void *data,
 			      unsigned int nr_secs, unsigned int len,
 			      int alloc_type, gfp_t gfp_mask);
-struct pblk_line *pblk_line_get(struct pblk *pblk);
+struct pblk_line *pblk_line_get(struct pblk *pblk, int erase);
 struct pblk_line *pblk_line_get_first(struct pblk *pblk);
 struct pblk_line *pblk_line_replace_data(struct pblk *pblk);
 int pblk_line_recov_alloc(struct pblk *pblk, struct pblk_line *line);
 void pblk_line_recov_close(struct pblk *pblk, struct pblk_line *line);
-struct pblk_line *pblk_line_get_data(struct pblk *pblk);
-struct pblk_line *pblk_line_get_erase(struct pblk *pblk);
 int pblk_line_erase(struct pblk *pblk, struct pblk_line *line);
 int pblk_line_is_full(struct pblk_line *line);
 void pblk_line_free(struct pblk *pblk, struct pblk_line *line);
@@ -897,6 +896,40 @@ static inline void *emeta_to_vsc(struct pblk *pblk, struct line_emeta *emeta)
 static inline int pblk_line_vsc(struct pblk_line *line)
 {
 	return le32_to_cpu(*line->vsc);
+}
+
+/* Use only on write thread, where the line is replaced */
+static inline struct pblk_line *__pblk_line_get_cur(struct pblk *pblk)
+{
+	return pblk->l_mg.cur_line;
+}
+
+/* Use only on write thread, where the line is replaced */
+static inline struct pblk_line *__pblk_line_get_next(struct pblk *pblk)
+{
+	return pblk->l_mg.next_line;
+}
+
+static inline struct pblk_line *pblk_line_get_cur(struct pblk *pblk)
+{
+	struct pblk_line *cur_line;
+
+	spin_lock(&pblk->l_mg.line_lock);
+	cur_line = __pblk_line_get_cur(pblk);
+	spin_unlock(&pblk->l_mg.line_lock);
+
+	return cur_line;
+}
+
+static inline struct pblk_line *pblk_line_get_next(struct pblk *pblk)
+{
+	struct pblk_line *next_line;
+
+	spin_lock(&pblk->l_mg.line_lock);
+	next_line = __pblk_line_get_cur(pblk);
+	spin_unlock(&pblk->l_mg.line_lock);
+
+	return next_line;
 }
 
 #define NVM_MEM_PAGE_WRITE (8)

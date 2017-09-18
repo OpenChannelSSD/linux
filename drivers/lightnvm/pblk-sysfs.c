@@ -154,7 +154,7 @@ static ssize_t pblk_sysfs_lines(struct pblk *pblk, char *page)
 	int map_weight = 0, meta_weight = 0;
 
 	spin_lock(&l_mg->free_lock);
-	cur_data = (l_mg->data_line) ? l_mg->data_line->id : -1;
+	cur_data = (l_mg->cur_line) ? l_mg->cur_line->id : -1;
 	nr_free_lines = l_mg->nr_free_lines;
 
 	list_for_each_entry(line, &l_mg->free_list, list)
@@ -208,18 +208,21 @@ static ssize_t pblk_sysfs_lines(struct pblk *pblk, char *page)
 		cor++;
 	spin_unlock(&l_mg->gc_lock);
 
-	spin_lock(&l_mg->free_lock);
-	if (l_mg->data_line) {
-		cur_sec = l_mg->data_line->cur_sec;
-		msecs = l_mg->data_line->left_msecs;
-		vsc = le32_to_cpu(*l_mg->data_line->vsc);
-		sec_in_line = l_mg->data_line->sec_in_line;
+	if (l_mg->cur_line) {
+		spin_lock(&l_mg->free_lock);
+		cur_sec = l_mg->cur_line->cur_sec;
+		msecs = l_mg->cur_line->left_msecs;
+		vsc = le32_to_cpu(*l_mg->cur_line->vsc);
+		sec_in_line = l_mg->cur_line->sec_in_line;
+		map_weight = bitmap_weight(l_mg->cur_line->map_bitmap,
+							lm->sec_per_line);
+		spin_unlock(&l_mg->free_lock);
+
+		spin_lock(&l_mg->meta_lock);
 		meta_weight = bitmap_weight(&l_mg->meta_bitmap,
 							PBLK_DATA_LINES);
-		map_weight = bitmap_weight(l_mg->data_line->map_bitmap,
-							lm->sec_per_line);
+		spin_unlock(&l_mg->meta_lock);
 	}
-	spin_unlock(&l_mg->free_lock);
 
 	if (nr_free_lines != free_line_cnt)
 		pr_err("pblk: corrupted free line list:%d/%d\n",
