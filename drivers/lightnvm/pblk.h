@@ -912,23 +912,13 @@ static inline int pblk_pad_distance(struct pblk *pblk)
 	return NVM_MEM_PAGE_WRITE * geo->nr_luns * geo->sec_per_pl;
 }
 
-static inline int pblk_dev_ppa_to_line(struct ppa_addr p)
+static inline int pblk_ppa_to_line(struct ppa_addr p)
 {
 	return p.g.blk;
-}
-
-static inline int pblk_tgt_ppa_to_line(struct ppa_addr p)
-{
-	return p.g.blk;
-}
-
-static inline int pblk_ppa_to_pos(struct nvm_geo *geo, struct ppa_addr p)
-{
-	return p.g.lun * geo->nr_chnls + p.g.ch;
 }
 
 /* A block within a line corresponds to the lun */
-static inline int pblk_dev_ppa_to_pos(struct nvm_geo *geo, struct ppa_addr p)
+static inline int pblk_ppa_to_pos(struct nvm_geo *geo, struct ppa_addr p)
 {
 	return p.g.lun * geo->nr_chnls + p.g.ch;
 }

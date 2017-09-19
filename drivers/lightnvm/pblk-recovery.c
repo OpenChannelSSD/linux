@@ -266,12 +266,12 @@ next_read_rq:
 		int pos;
 
 		ppa = addr_to_gen_ppa(pblk, r_ptr_int, line->id);
-		pos = pblk_dev_ppa_to_pos(geo, ppa);
+		pos = pblk_ppa_to_pos(geo, ppa);
 
 		while (test_bit(pos, line->blk_bitmap)) {
 			r_ptr_int += pblk->min_write_pgs;
 			ppa = addr_to_gen_ppa(pblk, r_ptr_int, line->id);
-			pos = pblk_dev_ppa_to_pos(geo, ppa);
+			pos = pblk_ppa_to_pos(geo, ppa);
 		}
 
 		for (j = 0; j < pblk->min_write_pgs; j++, i++, r_ptr_int++)
@@ -553,12 +553,12 @@ next_rq:
 
 		w_ptr = pblk_alloc_page(pblk, line, pblk->min_write_pgs);
 		ppa = addr_to_gen_ppa(pblk, w_ptr, line->id);
-		pos = pblk_dev_ppa_to_pos(geo, ppa);
+		pos = pblk_ppa_to_pos(geo, ppa);
 
 		while (test_bit(pos, line->blk_bitmap)) {
 			w_ptr += pblk->min_write_pgs;
 			ppa = addr_to_gen_ppa(pblk, w_ptr, line->id);
-			pos = pblk_dev_ppa_to_pos(geo, ppa);
+			pos = pblk_ppa_to_pos(geo, ppa);
 		}
 
 		for (j = 0; j < pblk->min_write_pgs; j++, i++, w_ptr++)
@@ -692,12 +692,13 @@ next_rq:
 
 		paddr = pblk_alloc_page(pblk, line, pblk->min_write_pgs);
 		ppa = addr_to_gen_ppa(pblk, paddr, line->id);
-		pos = pblk_dev_ppa_to_pos(geo, ppa);
+		pos = pblk_ppa_to_pos(geo, ppa);
 
 		while (test_bit(pos, line->blk_bitmap)) {
 			paddr += pblk->min_write_pgs;
 			ppa = addr_to_gen_ppa(pblk, paddr, line->id);
-			pos = pblk_dev_ppa_to_pos(geo, ppa);
+			pos = pblk_ppa_to_pos(
+					geo, ppa);
 		}
 
 		for (j = 0; j < pblk->min_write_pgs; j++, i++, paddr++)
