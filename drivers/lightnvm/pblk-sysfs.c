@@ -163,7 +163,7 @@ static ssize_t pblk_sysfs_lines(struct pblk *pblk, char *page)
 	spin_unlock(&l_mg->free_lock);
 
 	spin_lock(&l_mg->close_lock);
-	list_for_each_entry(line, &l_mg->emeta_list, list)
+	list_for_each_entry(line, &l_mg->close_list, list)
 		emeta_line_cnt++;
 	spin_unlock(&l_mg->close_lock);
 

@@ -1569,12 +1569,12 @@ void pblk_line_close_meta_sync(struct pblk *pblk)
 	LIST_HEAD(list);
 
 	spin_lock(&l_mg->close_lock);
-	if (list_empty(&l_mg->emeta_list)) {
+	if (list_empty(&l_mg->close_list)) {
 		spin_unlock(&l_mg->close_lock);
 		return;
 	}
 
-	list_cut_position(&list, &l_mg->emeta_list, l_mg->emeta_list.prev);
+	list_cut_position(&list, &l_mg->close_list, l_mg->close_list.prev);
 	spin_unlock(&l_mg->close_lock);
 
 	list_for_each_entry_safe(line, tline, &list, list) {
@@ -1653,7 +1653,7 @@ void pblk_line_close_meta(struct pblk *pblk, struct pblk_line *line)
 
 	spin_lock(&l_mg->close_lock);
 	spin_lock(&line->lock);
-	list_add_tail(&line->list, &l_mg->emeta_list);
+	list_add_tail(&line->list, &l_mg->close_list);
 	spin_unlock(&line->lock);
 	spin_unlock(&l_mg->close_lock);
 

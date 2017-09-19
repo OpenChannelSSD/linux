@@ -421,11 +421,11 @@ static struct pblk_line *pblk_should_submit_meta_io(struct pblk *pblk,
 
 	spin_lock(&l_mg->close_lock);
 retry:
-	if (list_empty(&l_mg->emeta_list)) {
+	if (list_empty(&l_mg->close_list)) {
 		spin_unlock(&l_mg->close_lock);
 		return NULL;
 	}
-	meta_line = list_first_entry(&l_mg->emeta_list, struct pblk_line, list);
+	meta_line = list_first_entry(&l_mg->close_list, struct pblk_line, list);
 	if (meta_line->emeta->mem >= lm->emeta_len[0])
 		goto retry;
 	spin_unlock(&l_mg->close_lock);

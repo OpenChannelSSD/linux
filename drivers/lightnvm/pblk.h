@@ -475,7 +475,7 @@ struct pblk_line_mgmt {
 	struct pblk_line *log_next;	/* Next FTL log line */
 	struct pblk_line *data_next;	/* Next data line */
 
-	struct list_head emeta_list;	/* Lines queued to schedule emeta */
+	struct list_head close_list;	/* Lines queued to be closed */
 
 	__le32 *vsc_list;		/* Valid sector counts for all lines */
 

@@ -750,7 +750,7 @@ add_emeta_page:
 	INIT_LIST_HEAD(&l_mg->gc_low_list);
 	INIT_LIST_HEAD(&l_mg->gc_empty_list);
 
-	INIT_LIST_HEAD(&l_mg->emeta_list);
+	INIT_LIST_HEAD(&l_mg->close_list);
 
 	l_mg->gc_lists[0] = &l_mg->gc_high_list;
 	l_mg->gc_lists[1] = &l_mg->gc_mid_list;
