@@ -1011,15 +1011,8 @@ static int pblk_line_init_bb(struct pblk *pblk, struct pblk_line *line,
 
 	if (lm->sec_per_line - line->sec_in_line !=
 		bitmap_weight(line->invalid_bitmap, lm->sec_per_line)) {
-		spin_lock(&l_mg->free_lock);
-		spin_lock(&line->lock);
-		line->state = PBLK_LINESTATE_BAD;
-		spin_unlock(&line->lock);
-
-		list_add_tail(&line->list, &l_mg->bad_list);
-		spin_unlock(&l_mg->free_lock);
-
 		pr_err("pblk: unexpected line %d is bad\n", line->id);
+		pblk_wl_put_line_bad(pblk, line);
 		return 0;
 	}
 
@@ -1053,16 +1046,8 @@ static int pblk_line_init_metadata(struct pblk *pblk, struct pblk_line *line,
 	nr_blk_line = lm->blk_per_line -
 			bitmap_weight(line->blk_bitmap, lm->blk_per_line);
 	if (nr_blk_line < lm->min_blk_line) {
-		spin_lock(&l_mg->free_lock);
-		spin_lock(&line->lock);
-		line->state = PBLK_LINESTATE_BAD;
-		spin_unlock(&line->lock);
-
-		list_add_tail(&line->list, &l_mg->bad_list);
-		spin_unlock(&l_mg->free_lock);
-
 		pr_debug("pblk: line %d is bad\n", line->id);
-
+		pblk_wl_put_line_bad(pblk, line);
 		return 0;
 	}
 
@@ -1155,19 +1140,18 @@ static int pblk_line_prepare(struct pblk *pblk, struct pblk_line *line,
 
 int pblk_line_recov_alloc(struct pblk *pblk, struct pblk_line *line)
 {
-	struct pblk_line_mgmt *l_mg = &pblk->l_mg;
 	int ret = 0;
 
 	ret = pblk_line_prepare(pblk, line, PBLK_LINETYPE_DATA);
 	if (ret) {
-		list_add(&line->list, &l_mg->free_list);
+		pblk_wl_put_line_free(pblk, line);
 		return ret;
 	}
 
 	pblk_rl_free_lines_dec(&pblk->rl, line);
 
 	if (!pblk_line_init_bb(pblk, line, 0)) {
-		list_add(&line->list, &l_mg->free_list);
+		pblk_wl_put_line_free(pblk, line);
 		return -EINTR;
 	}
 
@@ -1192,37 +1176,19 @@ void pblk_line_recov_close(struct pblk *pblk, struct pblk_line *line)
  */
 struct pblk_line *pblk_line_get(struct pblk *pblk, int erase)
 {
-	struct pblk_line_mgmt *l_mg = &pblk->l_mg;
 	struct pblk_line_meta *lm = &pblk->lm;
 	struct pblk_line *line;
 	int ret, bit;
 
 retry:
-	spin_lock(&l_mg->free_lock);
-	if (list_empty(&l_mg->free_list)) {
-		spin_unlock(&l_mg->free_lock);
-		pr_err("pblk: no free lines\n");
+	line = pblk_wl_get_line(pblk);
+	if (!line)
 		return NULL;
-	}
-
-	line = list_first_entry(&l_mg->free_list, struct pblk_line, list);
-	list_del(&line->list);
-
-	line->seq_nr = l_mg->d_seq_nr++;
-	l_mg->nr_free_lines--;
-	spin_unlock(&l_mg->free_lock);
 
 	bit = find_first_zero_bit(line->blk_bitmap, lm->blk_per_line);
 	if (unlikely(bit >= lm->blk_per_line)) {
-		spin_lock(&l_mg->free_lock);
-		spin_lock(&line->lock);
-		line->state = PBLK_LINESTATE_BAD;
-		spin_unlock(&line->lock);
-
-		list_add_tail(&line->list, &l_mg->bad_list);
-		spin_unlock(&l_mg->free_lock);
-
 		pr_debug("pblk: line %d is bad\n", line->id);
+		pblk_wl_put_line_bad(pblk, line);
 		goto retry;
 	}
 
@@ -1232,26 +1198,11 @@ retry:
 	ret = pblk_line_prepare(pblk, line, PBLK_LINETYPE_DATA);
 	if (ret) {
 		if (ret == -EAGAIN) {
-			spin_lock(&l_mg->free_lock);
-			spin_lock(&line->lock);
-			line->state = PBLK_LINESTATE_CORRUPT;
-			spin_unlock(&line->lock);
-
-			list_add(&line->list, &l_mg->corrupt_list);
-			spin_unlock(&l_mg->free_lock);
-
+			pblk_wl_put_line_corrupt(pblk, line);
 			goto retry;
 		} else {
-			spin_lock(&l_mg->free_lock);
-			spin_lock(&line->lock);
-			line->state = PBLK_LINESTATE_FREE;
-			spin_unlock(&line->lock);
-
-			list_add(&line->list, &l_mg->free_list);
-			l_mg->nr_free_lines++;
-			spin_unlock(&l_mg->free_lock);
-
 			pr_err("pblk: failed to prepare line %d\n", line->id);
+			pblk_wl_put_line_free(pblk, line);
 			return NULL;
 		}
 	}
@@ -1437,20 +1388,7 @@ void pblk_line_free(struct pblk *pblk, struct pblk_line *line)
 
 static void __pblk_line_put(struct pblk *pblk, struct pblk_line *line)
 {
-	struct pblk_line_mgmt *l_mg = &pblk->l_mg;
-
-	spin_lock(&line->lock);
-	WARN_ON(line->state != PBLK_LINESTATE_GC);
-	line->state = PBLK_LINESTATE_FREE;
-	line->gc_group = PBLK_LINEGC_NONE;
-	pblk_line_free(pblk, line);
-	spin_unlock(&line->lock);
-
-	spin_lock(&l_mg->free_lock);
-	list_add_tail(&line->list, &l_mg->free_list);
-	l_mg->nr_free_lines++;
-	spin_unlock(&l_mg->free_lock);
-
+	pblk_wl_put_line_free(pblk, line);
 	pblk_rl_free_lines_inc(&pblk->rl, line);
 }
 

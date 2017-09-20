@@ -814,6 +814,14 @@ int pblk_recov_setup_rq(struct pblk *pblk, struct pblk_c_ctx *c_ctx,
 			unsigned int comp);
 
 /*
+ * pblk wear-leveling
+ */
+struct pblk_line *pblk_wl_get_line(struct pblk *pblk);
+void pblk_wl_put_line_free(struct pblk *pblk, struct pblk_line *line);
+void pblk_wl_put_line_corrupt(struct pblk *pblk, struct pblk_line *line);
+void pblk_wl_put_line_bad(struct pblk *pblk, struct pblk_line *line);
+
+/*
  * pblk gc
  */
 #define PBLK_GC_MAX_READERS 8	/* Max number of outstanding GC reader jobs */

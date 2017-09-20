@@ -302,8 +302,15 @@ static void pblk_gc_reader_kick(struct pblk_gc *gc)
 	wake_up_process(gc->gc_reader_ts);
 }
 
-static struct pblk_line *pblk_gc_get_victim_line(struct pblk *pblk,
-						 struct list_head *group_list)
+/*
+ * Choose a victim block to recycle. GC will prefer lines with low valid sector
+ * count to keep a low write amplification factor. However, in order to maintain
+ * even wear across lines, GC coordinates with the wear-leveling algorithm.
+ *
+ * When implementing a new wear index, this is the right place to start with.
+ */
+static struct pblk_line *pblk_gc_victim_line(struct pblk *pblk,
+					     struct list_head *group_list)
 {
 	struct pblk_line *line, *victim;
 	int line_vsc, victim_vsc;
@@ -380,7 +387,7 @@ next_gc_group:
 			break;
 		}
 
-		line = pblk_gc_get_victim_line(pblk, group_list);
+		line = pblk_gc_victim_line(pblk, group_list);
 
 		spin_lock(&line->lock);
 		WARN_ON(line->state != PBLK_LINESTATE_CLOSED);
