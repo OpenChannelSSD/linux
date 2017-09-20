@@ -183,6 +183,11 @@ int pblk_rl_max_io(struct pblk_rl *rl)
 	return rl->rb_max_io;
 }
 
+int pblk_rl_state(struct pblk_rl *rl)
+{
+	return rl->rb_state;
+}
+
 static void pblk_rl_u_timer(unsigned long data)
 {
 	struct pblk_rl *rl = (struct pblk_rl *)data;

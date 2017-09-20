@@ -302,6 +302,23 @@ static void pblk_gc_reader_kick(struct pblk_gc *gc)
 	wake_up_process(gc->gc_reader_ts);
 }
 
+static struct pblk_line *pblk_gc_victim_line_opt(struct pblk *pblk,
+						 struct list_head *gc_list)
+{
+	struct pblk_line *line, *victim;
+	int line_vsc, victim_vsc;
+
+	victim = list_first_entry(gc_list, struct pblk_line, list);
+	list_for_each_entry(line, gc_list, list) {
+		line_vsc = le32_to_cpu(*line->vsc);
+		victim_vsc = le32_to_cpu(*victim->vsc);
+		if (line_vsc < victim_vsc)
+			victim = line;
+	}
+
+	return victim;
+}
+
 /*
  * Choose a victim block to recycle. GC will prefer lines with low valid sector
  * count to keep a low write amplification factor. However, in order to maintain
@@ -309,20 +326,68 @@ static void pblk_gc_reader_kick(struct pblk_gc *gc)
  *
  * When implementing a new wear index, this is the right place to start with.
  */
-static struct pblk_line *pblk_gc_victim_line(struct pblk *pblk,
-					     struct list_head *group_list)
+static struct pblk_line *pblk_gc_victim_line(struct pblk *pblk)
 {
-	struct pblk_line *line, *victim;
-	int line_vsc, victim_vsc;
+	struct pblk_line_mgmt *l_mg = &pblk->l_mg;
+	struct pblk_line *victim = NULL;
+	struct list_head *gc_list;
+	int gc_effort, gc_level;
+	int i;
 
-	victim = list_first_entry(group_list, struct pblk_line, list);
-	list_for_each_entry(line, group_list, list) {
-		line_vsc = le32_to_cpu(*line->vsc);
-		victim_vsc = le32_to_cpu(*victim->vsc);
-		if (line_vsc < victim_vsc)
-			victim = line;
+	/*
+	 * The rate-limiter state correlates to the effort that the garbage
+	 * collector should make to free up lines
+	 */
+	gc_effort = pblk_rl_state(&pblk->rl);
+	gc_level = 0;
+
+	for (i = 0; i < gc_effort; i++, gc_level++) {
+		gc_list = l_mg->gc_lists[gc_level];
+
+		spin_lock(&l_mg->gc_lock);
+		if (list_empty(gc_list)) {
+			spin_unlock(&l_mg->gc_lock);
+			continue;
+		}
+
+		victim = pblk_gc_victim_line_opt(pblk, gc_list);
+
+		spin_lock(&victim->lock);
+		WARN_ON(victim->state != PBLK_LINESTATE_CLOSED);
+		victim->state = PBLK_LINESTATE_GC;
+		spin_unlock(&victim->lock);
+
+		list_del(&victim->list);
+		spin_unlock(&l_mg->gc_lock);
+
+		break;
 	}
 
+	return victim;
+}
+
+static struct pblk_line *pblk_gc_full_victim_line(struct pblk *pblk)
+{
+	struct pblk_line_mgmt *l_mg = &pblk->l_mg;
+	struct pblk_line *victim = NULL;
+
+	spin_lock(&l_mg->gc_lock);
+	if (list_empty(&l_mg->gc_full_list))
+		goto out;
+
+	victim = list_first_entry(&l_mg->gc_full_list, struct pblk_line, list);
+	if (!victim)
+		goto out;
+
+	spin_lock(&victim->lock);
+	WARN_ON(victim->state != PBLK_LINESTATE_CLOSED);
+	victim->state = PBLK_LINESTATE_GC;
+	spin_unlock(&victim->lock);
+
+	list_del(&victim->list);
+
+out:
+	spin_unlock(&l_mg->gc_lock);
 	return victim;
 }
 
@@ -345,30 +410,15 @@ static bool pblk_gc_should_run(struct pblk_gc *gc, struct pblk_rl *rl)
  */
 static void pblk_gc_run(struct pblk *pblk)
 {
-	struct pblk_line_mgmt *l_mg = &pblk->l_mg;
 	struct pblk_gc *gc = &pblk->gc;
 	struct pblk_line *line;
-	struct list_head *group_list;
+	int inflight_gc;
 	bool run_gc;
-	int inflight_gc, gc_group = 0, prev_group = 0;
 
 	do {
-		spin_lock(&l_mg->gc_lock);
-		if (list_empty(&l_mg->gc_full_list)) {
-			spin_unlock(&l_mg->gc_lock);
+		line = pblk_gc_full_victim_line(pblk);
+		if (!line)
 			break;
-		}
-
-		line = list_first_entry(&l_mg->gc_full_list,
-							struct pblk_line, list);
-
-		spin_lock(&line->lock);
-		WARN_ON(line->state != PBLK_LINESTATE_CLOSED);
-		line->state = PBLK_LINESTATE_GC;
-		spin_unlock(&line->lock);
-
-		list_del(&line->list);
-		spin_unlock(&l_mg->gc_lock);
 
 		kref_put(&line->ref, pblk_line_put);
 	} while (1);
@@ -377,25 +427,10 @@ static void pblk_gc_run(struct pblk *pblk)
 	if (!run_gc || (atomic_read(&gc->inflight_gc) >= PBLK_GC_L_QD))
 		return;
 
-next_gc_group:
-	group_list = l_mg->gc_lists[gc_group++];
-
 	do {
-		spin_lock(&l_mg->gc_lock);
-		if (list_empty(group_list)) {
-			spin_unlock(&l_mg->gc_lock);
-			break;
-		}
-
-		line = pblk_gc_victim_line(pblk, group_list);
-
-		spin_lock(&line->lock);
-		WARN_ON(line->state != PBLK_LINESTATE_CLOSED);
-		line->state = PBLK_LINESTATE_GC;
-		spin_unlock(&line->lock);
-
-		list_del(&line->list);
-		spin_unlock(&l_mg->gc_lock);
+		line = pblk_gc_victim_line(pblk);
+		if (!line)
+			return;
 
 		spin_lock(&gc->r_lock);
 		list_add_tail(&line->list, &gc->r_list);
@@ -404,17 +439,11 @@ next_gc_group:
 		inflight_gc = atomic_inc_return(&gc->inflight_gc);
 		pblk_gc_reader_kick(gc);
 
-		prev_group = 1;
-
 		/* No need to queue up more GC lines than we can handle */
 		run_gc = pblk_gc_should_run(&pblk->gc, &pblk->rl);
 		if (!run_gc || inflight_gc >= PBLK_GC_L_QD)
-			break;
+			return;
 	} while (1);
-
-	if (!prev_group && pblk->rl.rb_state > gc_group &&
-						gc_group < PBLK_GC_NR_LISTS)
-		goto next_gc_group;
 }
 
 void pblk_gc_kick(struct pblk *pblk)

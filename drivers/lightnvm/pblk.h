@@ -855,6 +855,7 @@ void pblk_rl_gc_in(struct pblk_rl *rl, int nr_entries);
 void pblk_rl_out(struct pblk_rl *rl, int nr_user, int nr_gc);
 int pblk_rl_sysfs_rate_show(struct pblk_rl *rl);
 int pblk_rl_max_io(struct pblk_rl *rl);
+int pblk_rl_state(struct pblk_rl *rl);
 void pblk_rl_free_lines_inc(struct pblk_rl *rl, struct pblk_line *line);
 void pblk_rl_free_lines_dec(struct pblk_rl *rl, struct pblk_line *line);
 void pblk_rl_set_space_limit(struct pblk_rl *rl, int entries_left);
