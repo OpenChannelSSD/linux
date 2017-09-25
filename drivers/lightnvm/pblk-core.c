@@ -882,7 +882,11 @@ out:
 	return ret;
 }
 
-int pblk_line_erase(struct pblk *pblk, struct pblk_line *line)
+/*
+ * Erase a line synchronously. On success the line is erased and in case of
+ * failed erases, the bad block table is updated
+ */
+static int pblk_line_erase_sync(struct pblk *pblk, struct pblk_line *line)
 {
 	struct pblk_line_meta *lm = &pblk->lm;
 	struct ppa_addr ppa;
@@ -911,6 +915,33 @@ int pblk_line_erase(struct pblk *pblk, struct pblk_line *line)
 			return ret;
 		}
 	} while (1);
+
+	return 0;
+}
+
+/*
+ * Guarantee that all good blocks in a line have been erased. Erase
+ * synchronously the remaining blocks if necessary
+ */
+static int pblk_line_erase_async(struct pblk *pblk, struct pblk_line *line)
+{
+	unsigned int left_seblks;
+	int ret;
+
+retry_erase:
+	left_seblks = atomic_read(&line->left_seblks);
+	if (left_seblks) {
+		/* If line is not fully erased, erase it */
+		if (atomic_read(&line->left_eblks)) {
+			ret = pblk_line_erase_sync(pblk, line);
+			if (ret)
+				return ret;
+		} else {
+			io_schedule();
+		}
+
+		goto retry_erase;
+	}
 
 	return 0;
 }
@@ -1192,7 +1223,7 @@ retry:
 		goto retry;
 	}
 
-	if (erase && pblk_line_erase(pblk, line))
+	if (erase && pblk_line_erase_sync(pblk, line))
 		goto retry;
 
 	ret = pblk_line_prepare(pblk, line, PBLK_LINETYPE_DATA);
@@ -1322,7 +1353,6 @@ struct pblk_line *pblk_line_replace_data(struct pblk *pblk)
 {
 	struct pblk_line_mgmt *l_mg = &pblk->l_mg;
 	struct pblk_line *old, *cur, *next;
-	unsigned int left_seblks;
 
 	if (pblk_get_state(pblk) != PBLK_STATE_RUNNING) {
 		spin_lock(&l_mg->line_lock);
@@ -1337,19 +1367,8 @@ struct pblk_line *pblk_line_replace_data(struct pblk *pblk)
 	if (!cur)
 		return NULL;
 
-retry_erase:
-	left_seblks = atomic_read(&cur->left_seblks);
-	if (left_seblks) {
-		/* If line is not fully erased, erase it */
-		if (atomic_read(&cur->left_eblks)) {
-			if (pblk_line_erase(pblk, cur))
-				return NULL;
-		} else {
-			io_schedule();
-		}
-
-		goto retry_erase;
-	}
+	if (pblk_line_erase_async(pblk, cur))
+		return NULL;
 
 retry_setup:
 	if (!pblk_line_init_metadata(pblk, cur, old)) {
