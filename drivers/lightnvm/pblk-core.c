@@ -1097,6 +1097,7 @@ static int pblk_line_init_metadata(struct pblk *pblk, struct pblk_line *line,
 	/* Start metadata */
 	smeta_buf->seq_nr = cpu_to_le64(line->seq_nr);
 	smeta_buf->window_wr_lun = cpu_to_le32(geo->nr_luns);
+	smeta_buf->pec = cpu_to_le32(atomic_read(&line->pec));
 
 	/* Fill metadata among lines */
 	if (cur) {

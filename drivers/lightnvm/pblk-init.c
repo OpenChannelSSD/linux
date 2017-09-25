@@ -668,7 +668,13 @@ static int pblk_lines_init(struct pblk *pblk)
 	l_mg->next_line = l_mg->cur_line = NULL;
 	l_mg->d_seq_nr = 0;
 	l_mg->nr_free_lines = 0;
+	l_mg->pec_max = 0;
+	atomic_set(&l_mg->under_wear, 0);
+	atomic_set(&l_mg->inflight_wear, 0);
 	bitmap_zero(&l_mg->meta_bitmap, PBLK_DATA_LINES);
+
+	// JAVIER: TO DEFINE OTHER PLACE
+	l_mg->pec_thres = 10;
 
 	lm->sec_per_line = geo->sec_per_blk * geo->nr_luns;
 	lm->blk_per_line = geo->nr_luns;
@@ -749,6 +755,7 @@ add_emeta_page:
 	INIT_LIST_HEAD(&l_mg->gc_mid_list);
 	INIT_LIST_HEAD(&l_mg->gc_low_list);
 	INIT_LIST_HEAD(&l_mg->gc_empty_list);
+	INIT_LIST_HEAD(&l_mg->wear_list);
 
 	INIT_LIST_HEAD(&l_mg->close_list);
 
@@ -758,6 +765,7 @@ add_emeta_page:
 
 	spin_lock_init(&l_mg->free_lock);
 	spin_lock_init(&l_mg->gc_lock);
+	spin_lock_init(&l_mg->wl_lock);
 	spin_lock_init(&l_mg->close_lock);
 	spin_lock_init(&l_mg->meta_lock);
 	spin_lock_init(&l_mg->line_lock);
@@ -781,6 +789,7 @@ add_emeta_page:
 		line->state = PBLK_LINESTATE_FREE;
 		line->gc_group = PBLK_LINEGC_NONE;
 		line->vsc = &l_mg->vsc_list[i];
+		atomic_set(&line->pec, 0);
 		spin_lock_init(&line->lock);
 
 		ret = pblk_alloc_line_bitmaps(pblk, line);
@@ -806,6 +815,7 @@ add_emeta_page:
 
 		l_mg->nr_free_lines++;
 		list_add_tail(&line->list, &l_mg->free_list);
+		list_add_tail(&line->wl_list, &l_mg->wear_list);
 	}
 
 	pblk_set_provision(pblk, nr_free_blks);

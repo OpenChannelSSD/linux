@@ -899,6 +899,7 @@ struct pblk_line *pblk_recov_l2p(struct pblk *pblk)
 		line->id = le32_to_cpu(smeta_buf->header.id);
 		line->type = le16_to_cpu(smeta_buf->header.type);
 		line->seq_nr = le64_to_cpu(smeta_buf->seq_nr);
+		atomic_set(&line->pec, le32_to_cpu(smeta_buf->pec) + 1);
 		spin_unlock(&line->lock);
 
 		/* Update general metadata */
@@ -907,6 +908,7 @@ struct pblk_line *pblk_recov_l2p(struct pblk *pblk)
 			l_mg->d_seq_nr = line->seq_nr + 1;
 		l_mg->nr_free_lines--;
 		list_del(&line->list);
+		pblk_wl_update_pec_thres(l_mg, line);
 		spin_unlock(&l_mg->free_lock);
 
 		spin_lock(&l_mg->line_lock);

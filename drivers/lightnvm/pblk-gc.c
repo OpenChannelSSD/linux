@@ -320,16 +320,12 @@ static struct pblk_line *pblk_gc_victim_line_opt(struct pblk *pblk,
 }
 
 /*
- * Choose a victim block to recycle. GC will prefer lines with low valid sector
- * count to keep a low write amplification factor. However, in order to maintain
- * even wear across lines, GC coordinates with the wear-leveling algorithm.
- *
- * When implementing a new wear index, this is the right place to start with.
+ * Choose a victim block to recycle using the valid sector count as metric.
  */
-static struct pblk_line *pblk_gc_victim_line(struct pblk *pblk)
+static struct pblk_line *pblk_gc_cost_victim_line(struct pblk *pblk)
 {
 	struct pblk_line_mgmt *l_mg = &pblk->l_mg;
-	struct pblk_line *victim = NULL;
+	struct pblk_line *victim;
 	struct list_head *gc_list;
 	int gc_effort, gc_level;
 	int i;
@@ -357,11 +353,40 @@ static struct pblk_line *pblk_gc_victim_line(struct pblk *pblk)
 		victim->state = PBLK_LINESTATE_GC;
 		spin_unlock(&victim->lock);
 
+		pblk_wl_update_pec_thres(l_mg, victim);
+
 		list_del(&victim->list);
 		spin_unlock(&l_mg->gc_lock);
 
-		break;
+		return victim;
 	}
+
+	return NULL;
+}
+
+/*
+ * Choose a victim block to recycle using the wear index as metric.
+ *
+ * Currently, we implement a lazy wear-leveling (WL) - GC coordination, where
+ * the wear index is the number of PE cycles. In essence, GC is allowed to
+ * choose its own victims. However, WL makes sure that lines do not fall under a
+ * configurable PE cycle threshold, thus guaranteeing even wear within the
+ * threshold.
+ *
+ * When implementing a new wear index, this is the right place to start with.
+ */
+static struct pblk_line *pblk_gc_wear_victim_line(struct pblk *pblk)
+{
+	struct pblk_line_mgmt *l_mg = &pblk->l_mg;
+	struct pblk_line *victim;
+
+	victim = pblk_wl_victim_line(pblk);
+	if (!victim)
+		return NULL;
+
+	spin_lock(&l_mg->gc_lock);
+	list_del(&victim->list);
+	spin_unlock(&l_mg->gc_lock);
 
 	return victim;
 }
@@ -384,6 +409,8 @@ static struct pblk_line *pblk_gc_full_victim_line(struct pblk *pblk)
 	victim->state = PBLK_LINESTATE_GC;
 	spin_unlock(&victim->lock);
 
+	pblk_wl_update_pec_thres(l_mg, victim);
+
 	list_del(&victim->list);
 
 out:
@@ -402,6 +429,15 @@ static bool pblk_gc_should_run(struct pblk_gc *gc, struct pblk_rl *rl)
 	return ((gc->gc_active) && (nr_blocks_need > nr_blocks_free));
 }
 
+static void pblk_gc_sched(struct pblk_gc *gc, struct pblk_line *line)
+{
+	spin_lock(&gc->r_lock);
+	list_add_tail(&line->list, &gc->r_list);
+	spin_unlock(&gc->r_lock);
+
+	pblk_gc_reader_kick(gc);
+}
+
 /*
  * Lines with no valid sectors will be returned to the free list immediately. If
  * GC is activated - either because the free block count is under the determined
@@ -412,9 +448,10 @@ static void pblk_gc_run(struct pblk *pblk)
 {
 	struct pblk_gc *gc = &pblk->gc;
 	struct pblk_line *line;
-	int inflight_gc;
+	int inflight_gc = atomic_read(&gc->inflight_gc);
 	bool run_gc;
 
+	/* Directly free up lines with no valid sectors */
 	do {
 		line = pblk_gc_full_victim_line(pblk);
 		if (!line)
@@ -423,23 +460,33 @@ static void pblk_gc_run(struct pblk *pblk)
 		kref_put(&line->ref, pblk_line_put);
 	} while (1);
 
+	/* Schedule lines under wear threshold for GC */
+	do {
+		line = pblk_gc_wear_victim_line(pblk);
+		if (!line)
+			break;
+
+		inflight_gc = atomic_inc_return(&gc->inflight_gc);
+		pblk_gc_sched(gc, line);
+
+		run_gc = pblk_gc_should_run(&pblk->gc, &pblk->rl);
+		if (!run_gc || inflight_gc >= PBLK_GC_L_QD)
+			return;
+	} while (1);
+
+	/* Schedule lines based on valid sector count for GC */
 	run_gc = pblk_gc_should_run(&pblk->gc, &pblk->rl);
-	if (!run_gc || (atomic_read(&gc->inflight_gc) >= PBLK_GC_L_QD))
+	if (!run_gc || inflight_gc >= PBLK_GC_L_QD)
 		return;
 
 	do {
-		line = pblk_gc_victim_line(pblk);
+		line = pblk_gc_cost_victim_line(pblk);
 		if (!line)
 			return;
 
-		spin_lock(&gc->r_lock);
-		list_add_tail(&line->list, &gc->r_list);
-		spin_unlock(&gc->r_lock);
-
 		inflight_gc = atomic_inc_return(&gc->inflight_gc);
-		pblk_gc_reader_kick(gc);
+		pblk_gc_sched(gc, line);
 
-		/* No need to queue up more GC lines than we can handle */
 		run_gc = pblk_gc_should_run(&pblk->gc, &pblk->rl);
 		if (!run_gc || inflight_gc >= PBLK_GC_L_QD)
 			return;

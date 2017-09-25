@@ -54,9 +54,9 @@ static ssize_t pblk_sysfs_rate_limiter(struct pblk *pblk, char *page)
 	int rb_gc_max, rb_gc_cnt, rb_budget, rb_state;
 
 	free_blocks = atomic_read(&pblk->rl.free_blocks);
-	rb_user_max = pblk->rl.rb_user_max;
 	rb_user_cnt = atomic_read(&pblk->rl.rb_user_cnt);
-	rb_gc_max = pblk->rl.rb_gc_max;
+	rb_user_max = atomic_read(&pblk->rl.rb_user_max);
+	rb_gc_max = atomic_read(&pblk->rl.rb_gc_max);
 	rb_gc_cnt = atomic_read(&pblk->rl.rb_gc_cnt);
 	rb_budget = pblk->rl.rb_budget;
 	rb_state = pblk->rl.rb_state;
@@ -263,6 +263,10 @@ static ssize_t pblk_sysfs_lines_info(struct pblk *pblk, char *page)
 	struct pblk_line_meta *lm = &pblk->lm;
 	ssize_t sz = 0;
 
+	struct pblk_line_mgmt *l_mg = &pblk->l_mg;
+	struct pblk_line *t = NULL;
+	int i = 0;
+
 	sz = snprintf(page, PAGE_SIZE - sz,
 				"smeta - len:%d, secs:%d\n",
 					lm->smeta_len, lm->smeta_sec);
@@ -280,6 +284,22 @@ static ssize_t pblk_sysfs_lines_info(struct pblk *pblk, char *page)
 					lm->blk_per_line,
 					lm->sec_per_line,
 					geo->sec_per_blk);
+
+
+	printk(KERN_CRIT "WL LIST\n");
+	spin_lock(&l_mg->wl_lock);
+	list_for_each_entry(t, &l_mg->wear_list, wl_list)
+		printk(KERN_CRIT "pos:%d, line:%d, pec:%d\n",
+				i++, t->id, atomic_read(&t->pec));
+	spin_unlock(&l_mg->wl_lock);
+
+	i = 0;
+	printk(KERN_CRIT "FREE LIST\n");
+	spin_lock(&l_mg->free_lock);
+	list_for_each_entry(t, &l_mg->free_list, list)
+		printk(KERN_CRIT "pos:%d, line:%d, pec:%d\n",
+				i++, t->id, atomic_read(&t->pec));
+	spin_unlock(&l_mg->free_lock);
 
 	return sz;
 }

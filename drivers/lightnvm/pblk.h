@@ -270,11 +270,11 @@ struct pblk_rl {
 				 * 64, i.e., 256kb.
 				 */
 	int rb_budget;		/* Total number of entries available for I/O */
-	int rb_user_max;	/* Max buffer entries available for user I/O */
-	int rb_gc_max;		/* Max buffer entries available for GC I/O */
 	int rb_gc_rsv;		/* Reserved buffer entries for GC I/O */
 	int rb_state;		/* Rate-limiter current state */
 	int rb_max_io;		/* Maximum size for an I/O giving the config */
+	atomic_t rb_user_max;	/* Max buffer entries available for user I/O */
+	atomic_t rb_gc_max;	/* Max buffer entries available for GC I/O */
 
 	atomic_t rb_user_cnt;	/* User I/O buffer counter */
 	atomic_t rb_gc_cnt;	/* GC I/O buffer counter */
@@ -315,6 +315,7 @@ enum {
 	PBLK_LINEGC_MID = 23,
 	PBLK_LINEGC_HIGH = 24,
 	PBLK_LINEGC_FULL = 25,
+	PBLK_LINEGC_WEAR = 26,
 };
 
 #define PBLK_MAGIC 0x70626c6b /*pblk*/
@@ -340,6 +341,8 @@ struct line_smeta {
 
 	/* Active writers */
 	__le32 window_wr_lun;	/* Number of parallel LUNs to write */
+
+	__le32 pec;		 /* Program/Erase counter for the line */
 
 	__le32 rsvd[2];
 
@@ -403,7 +406,9 @@ struct pblk_line {
 	int state;			/* PBLK_LINESTATE_X */
 	int type;			/* PBLK_LINETYPE_X */
 	int gc_group;			/* PBLK_LINEGC_X */
-	struct list_head list;		/* Free, GC lists */
+
+	struct list_head list;		/* Local Free, GC lists */
+	struct list_head wl_list;	/* Global WL list */
 
 	unsigned long *lun_bitmap;	/* Bitmap for LUNs mapped in line */
 
@@ -433,6 +438,7 @@ struct pblk_line {
 	unsigned int nr_valid_lbas;	/* Number of valid lbas in line */
 
 	__le32 *vsc;			/* Valid sector count in line */
+	atomic_t pec;			/* Program/Erase counter for the line */
 
 	struct kref ref;		/* Write buffer L2P references */
 
@@ -460,6 +466,12 @@ struct pblk_line_mgmt {
 	struct list_head free_list;	/* Full lines ready to use */
 	struct list_head corrupt_list;	/* Full lines corrupted */
 	struct list_head bad_list;	/* Full lines bad */
+
+	/* P/E counters - use free_lock */
+	int pec_max;			/* Max. P/E counter on instance */
+	int pec_thres;			/* Valid wear threshold across lines */
+	atomic_t under_wear;		/* Number of lines under wear thres. */
+	atomic_t inflight_wear;		/* Number of wear lines being GC'ed */
 	spinlock_t free_lock;
 
 	/* GC lists - use gc_lock */
@@ -467,10 +479,14 @@ struct pblk_line_mgmt {
 	struct list_head gc_high_list;	/* Full lines ready to GC, high isc */
 	struct list_head gc_mid_list;	/* Full lines ready to GC, mid isc */
 	struct list_head gc_low_list;	/* Full lines ready to GC, low isc */
-	spinlock_t gc_lock;
 
 	struct list_head gc_full_list;	/* Full lines ready to GC, no valid */
 	struct list_head gc_empty_list;	/* Full lines close, all valid */
+	spinlock_t gc_lock;
+
+	/* WL list - use wl_lock */
+	struct list_head wear_list;	/* Lines reclaimed for GC by WL */
+	spinlock_t wl_lock;
 
 	struct pblk_line *next_line;	/* Next data line */
 	struct pblk_line *cur_line;	/* Current data line */
@@ -819,6 +835,10 @@ struct pblk_line *pblk_wl_get_line(struct pblk *pblk);
 void pblk_wl_put_line_free(struct pblk *pblk, struct pblk_line *line);
 void pblk_wl_put_line_corrupt(struct pblk *pblk, struct pblk_line *line);
 void pblk_wl_put_line_bad(struct pblk *pblk, struct pblk_line *line);
+void pblk_wl_update_pec_thres(struct pblk_line_mgmt *l_mg,
+			      struct pblk_line *cur);
+struct pblk_line *pblk_wl_victim_line(struct pblk *pblk);
+int pblk_wl_inflight_lines(struct pblk *pblk);
 
 /*
  * pblk gc

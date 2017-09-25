@@ -40,7 +40,7 @@ int pblk_rl_user_may_insert(struct pblk_rl *rl, int nr_entries)
 	if (unlikely(rb_space >= 0) && (rb_space - nr_entries < 0))
 		return NVM_IO_ERR;
 
-	if (rb_user_cnt >= rl->rb_user_max)
+	if (rb_user_cnt >= atomic_read(&rl->rb_user_max))
 		return NVM_IO_REQUEUE;
 
 	return NVM_IO_OK;
@@ -61,7 +61,7 @@ int pblk_rl_gc_may_insert(struct pblk_rl *rl, int nr_entries)
 
 	/* If there is no user I/O let GC take over space on the write buffer */
 	rb_user_active = READ_ONCE(rl->rb_user_active);
-	return (!(rb_gc_cnt >= rl->rb_gc_max && rb_user_active));
+	return (!(rb_gc_cnt >= atomic_read(&rl->rb_gc_max) && rb_user_active));
 }
 
 void pblk_rl_user_in(struct pblk_rl *rl, int nr_entries)
@@ -98,23 +98,25 @@ unsigned long pblk_rl_nr_free_blks(struct pblk_rl *rl)
  */
 static int pblk_rl_update_rates(struct pblk_rl *rl, unsigned long max)
 {
+	struct pblk *pblk = container_of(rl, struct pblk, rl);
 	unsigned long free_blocks = pblk_rl_nr_free_blks(rl);
+	int rb_gc_max, rb_user_max;
 
 	if (free_blocks >= rl->high) {
-		rl->rb_user_max = max;
-		rl->rb_gc_max = 0;
+		rb_user_max = max;
+		rb_gc_max = 0;
 		rl->rb_state = PBLK_RL_HIGH;
 	} else if (free_blocks < rl->high) {
 		int shift = rl->high_pw - rl->rb_windows_pw;
 		int user_windows = free_blocks >> shift;
 		int user_max = user_windows << PBLK_MAX_REQ_ADDRS_PW;
 
-		rl->rb_user_max = user_max;
-		rl->rb_gc_max = max - user_max;
+		rb_user_max = user_max;
+		rb_gc_max = max - user_max;
 
 		if (free_blocks <= rl->rsv_blocks) {
-			rl->rb_user_max = 0;
-			rl->rb_gc_max = max;
+			rb_user_max = 0;
+			rb_gc_max = max;
 		}
 
 		/* In the worst case, we will need to GC lines in the low list
@@ -123,6 +125,14 @@ static int pblk_rl_update_rates(struct pblk_rl *rl, unsigned long max)
 		 */
 		rl->rb_state = PBLK_RL_LOW;
 	}
+
+	if (pblk_wl_inflight_lines(pblk) && !rb_gc_max) {
+		rb_user_max -= PBLK_MAX_REQ_ADDRS;
+		rb_gc_max = PBLK_MAX_REQ_ADDRS;
+	}
+
+	atomic_set(&rl->rb_user_max, rb_user_max);
+	atomic_set(&rl->rb_gc_max, rb_gc_max);
 
 	return rl->rb_state;
 }
@@ -175,7 +185,7 @@ int pblk_rl_low_thrs(struct pblk_rl *rl)
 
 int pblk_rl_sysfs_rate_show(struct pblk_rl *rl)
 {
-	return rl->rb_user_max;
+	return atomic_read(&rl->rb_user_max);
 }
 
 int pblk_rl_max_io(struct pblk_rl *rl)
@@ -223,10 +233,11 @@ void pblk_rl_init(struct pblk_rl *rl, int budget)
 
 	/* To start with, all buffer is available to user I/O writers */
 	rl->rb_budget = budget;
-	rl->rb_user_max = budget;
 	rl->rb_max_io = budget >> 1;
-	rl->rb_gc_max = 0;
 	rl->rb_state = PBLK_RL_HIGH;
+
+	atomic_set(&rl->rb_user_max, budget);
+	atomic_set(&rl->rb_gc_max, 0);
 
 	atomic_set(&rl->rb_user_cnt, 0);
 	atomic_set(&rl->rb_gc_cnt, 0);
