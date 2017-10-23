@@ -341,6 +341,38 @@ static ssize_t pblk_sysfs_get_write_amp_trip(struct pblk *pblk, char *page)
 		atomic64_read(&pblk->pad_wa) - pblk->pad_rst_wa, page);
 }
 
+static ssize_t pblk_sysfs_get_padding_dist(struct pblk *pblk, char *page)
+{
+	int sz = 0;
+	unsigned long long total;
+	unsigned long long total_buckets = 0;
+	int buckets = pblk->min_write_pgs - 1;
+	int i;
+
+	total = atomic64_read(&pblk->nr_flush) - pblk->nr_flush_rst;
+
+	for (i = 0; i < buckets; i++)
+		total_buckets += atomic64_read(&pblk->pad_dist[i]);
+
+	if (!total) {
+		for (i = 0; i < (buckets + 1); i++)
+			sz += snprintf(page + sz, PAGE_SIZE - sz,
+				"%d:0 ", i);
+		sz += snprintf(page + sz, PAGE_SIZE - sz, "\n");
+
+		return sz;
+	}
+
+	sz += snprintf(page + sz, PAGE_SIZE - sz, "0:%lld%% ",
+		((total - total_buckets) * 100) / total);
+	for (i = 0; i < buckets; i++)
+		sz += snprintf(page + sz, PAGE_SIZE - sz, "%d:%lld%% ", i + 1,
+			(atomic64_read(&pblk->pad_dist[i]) * 100) / total);
+	sz += snprintf(page + sz, PAGE_SIZE - sz, "\n");
+
+	return sz;
+}
+
 #ifdef CONFIG_NVM_DEBUG
 static ssize_t pblk_sysfs_stats_debug(struct pblk *pblk, char *page)
 {
@@ -427,6 +459,32 @@ static ssize_t pblk_sysfs_set_write_amp_trip(struct pblk *pblk,
 }
 
 
+static ssize_t pblk_sysfs_set_padding_dist(struct pblk *pblk,
+			const char *page, size_t len)
+{
+	size_t c_len;
+	int reset_value;
+	int buckets = pblk->min_write_pgs - 1;
+	int i;
+
+	c_len = strcspn(page, "\n");
+	if (c_len >= len)
+		return -EINVAL;
+
+	if (kstrtouint(page, 0, &reset_value))
+		return -EINVAL;
+
+	if (reset_value !=  0)
+		return -EINVAL;
+
+	for (i = 0; i < buckets; i++)
+		atomic64_set(&pblk->pad_dist[i], 0);
+
+	pblk->nr_flush_rst = atomic64_read(&pblk->nr_flush);
+
+	return len;
+}
+
 static struct attribute sys_write_luns = {
 	.name = "write_luns",
 	.mode = 0444,
@@ -487,6 +545,11 @@ static struct attribute sys_write_amp_trip = {
 	.mode = 0644,
 };
 
+static struct attribute sys_padding_dist = {
+	.name = "padding_dist",
+	.mode = 0644,
+};
+
 #ifdef CONFIG_NVM_DEBUG
 static struct attribute sys_stats_debug_attr = {
 	.name = "stats",
@@ -507,6 +570,7 @@ static struct attribute *pblk_attrs[] = {
 	&sys_lines_info_attr,
 	&sys_write_amp_mileage,
 	&sys_write_amp_trip,
+	&sys_padding_dist,
 #ifdef CONFIG_NVM_DEBUG
 	&sys_stats_debug_attr,
 #endif
@@ -540,6 +604,8 @@ static ssize_t pblk_sysfs_show(struct kobject *kobj, struct attribute *attr,
 		return pblk_sysfs_get_write_amp_mileage(pblk, buf);
 	else if (strcmp(attr->name, "write_amp_trip") == 0)
 		return pblk_sysfs_get_write_amp_trip(pblk, buf);
+	else if (strcmp(attr->name, "padding_dist") == 0)
+		return pblk_sysfs_get_padding_dist(pblk, buf);
 #ifdef CONFIG_NVM_DEBUG
 	else if (strcmp(attr->name, "stats") == 0)
 		return pblk_sysfs_stats_debug(pblk, buf);
@@ -558,6 +624,8 @@ static ssize_t pblk_sysfs_store(struct kobject *kobj, struct attribute *attr,
 		return pblk_sysfs_set_sec_per_write(pblk, buf, len);
 	else if (strcmp(attr->name, "write_amp_trip") == 0)
 		return pblk_sysfs_set_write_amp_trip(pblk, buf, len);
+	else if (strcmp(attr->name, "padding_dist") == 0)
+		return pblk_sysfs_set_padding_dist(pblk, buf, len);
 	return 0;
 }
 
