@@ -872,6 +872,12 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 	struct nvme_command cmnd;
 	blk_status_t ret;
 
+	if (req_op(req) == REQ_OP_ZONE_REPORT) {
+		ret = nvme_nvm_zone_report(ns, req, &cmnd);
+		blk_mq_end_request(req, ret);
+		return ret;
+	}
+
 	ret = nvme_setup_cmd(ns, req, &cmnd);
 	if (ret)
 		return ret;

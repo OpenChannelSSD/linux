@@ -964,6 +964,97 @@ int nvme_nvm_ioctl(struct nvme_ns *ns, unsigned int cmd, unsigned long arg)
 	}
 }
 
+#ifdef CONFIG_BLK_DEV_ZONED
+static void nvme_nvm_parse_chk_meta(struct nvme_ns *ns, struct blk_zone *zone,
+		struct nvm_chk_meta *chk)
+{
+	int type = chk->type & 0xf;
+	int shift = ns->lba_shift - 9;
+
+	zone->start = chk->slba << shift;
+	zone->len = chk->cnlb << shift;
+	zone->wp = zone->start + (chk->wp << shift);
+
+	switch (type) {
+		case NVM_CHK_TP_W_SEQ:
+			zone->type = BLK_ZONE_TYPE_SEQWRITE_REQ;
+			break;
+		case NVM_CHK_TP_W_RAN:
+			zone->type = BLK_ZONE_TYPE_CONVENTIONAL;
+			break;
+	}
+
+	switch (chk->state) {
+		case NVM_CHK_ST_FREE:
+			zone->cond = BLK_ZONE_COND_EMPTY;
+			break;
+		case NVM_CHK_ST_CLOSED:
+			zone->cond = BLK_ZONE_COND_FULL;
+			break;
+		case NVM_CHK_ST_OPEN:
+			zone->cond = BLK_ZONE_COND_IMP_OPEN;
+			break;
+		case NVM_CHK_ST_OFFLINE:
+			zone->cond = BLK_ZONE_COND_OFFLINE;
+			break;
+	}
+}
+
+blk_status_t nvme_nvm_zone_report(struct nvme_ns *ns, struct request *req,
+		struct nvme_command *cmd)
+{
+	struct nvm_dev *ndev = ns->ndev;
+	struct blk_zone_report_hdr *hdr;
+	struct nvm_chk_meta *chk;
+	struct bio_vec bvec;
+	struct bvec_iter iter;
+	void *addr;
+	unsigned int offset, bytes = 0;
+	int zones_rqs = 128;// blk_rq_bytes(req) / sizeof(struct blk_zone) - 1;
+
+	chk = kzalloc(zones_rqs * sizeof(struct nvm_chk_meta), GFP_KERNEL);
+	if (!chk)
+		return BLK_STS_RESOURCE;
+
+	if (nvme_nvm_get_chk_meta(ndev, chk, blk_rq_pos(req) >> 3, zones_rqs)) {
+		kfree(chk);
+		return BLK_STS_RESOURCE;
+	}
+
+	bio_for_each_segment(bvec, req->bio, iter) {
+		offset = 0;
+
+		addr = kmap_atomic(bvec.bv_page);
+
+		if (!bytes) {
+			hdr = (struct blk_zone_report_hdr *)addr;
+			hdr->nr_zones = zones_rqs;
+
+			bytes += sizeof(struct blk_zone);
+			offset += sizeof(struct blk_zone);
+		}
+
+		while (offset < bvec.bv_len && zones_rqs) {
+			struct blk_zone *zone = addr + offset;
+
+			nvme_nvm_parse_chk_meta(ns, zone, chk);
+
+			bytes += sizeof(struct blk_zone);
+			offset += sizeof(struct blk_zone);
+			chk++;
+			zones_rqs--;
+		}
+
+		kunmap_atomic(addr);
+
+		if (!zones_rqs)
+			break;
+	}
+
+	return BLK_STS_OK;
+}
+#endif /* CONFIG_BLK_DEV_ZONED */
+
 void nvme_nvm_update_nvm_info(struct nvme_ns *ns)
 {
 	struct nvm_dev *ndev = ns->ndev;
@@ -971,6 +1062,10 @@ void nvme_nvm_update_nvm_info(struct nvme_ns *ns)
 
 	geo->csecs = 1 << ns->lba_shift;
 	geo->sos = ns->ms;
+
+	blk_queue_chunk_sectors(ns->queue,
+			ndev->geo.clba << (ns->lba_shift - 9));
+	ns->queue->limits.zoned = BLK_ZONED_HM;
 }
 
 int nvme_nvm_register(struct nvme_ns *ns, char *disk_name, int node)

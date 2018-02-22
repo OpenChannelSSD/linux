@@ -631,6 +631,7 @@ blk_status_t nvme_setup_cmd(struct nvme_ns *ns, struct request *req,
 	case REQ_OP_WRITE_ZEROES:
 		/* currently only aliased to deallocate for a few ctrls: */
 	case REQ_OP_DISCARD:
+	case REQ_OP_ZONE_RESET:
 		ret = nvme_setup_discard(ns, req, cmd);
 		break;
 	case REQ_OP_READ:
