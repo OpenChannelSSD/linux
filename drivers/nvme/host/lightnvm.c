@@ -958,13 +958,169 @@ int nvme_nvm_ioctl(struct nvme_ns *ns, unsigned int cmd, unsigned long arg)
 	}
 }
 
-void nvme_nvm_update_nvm_info(struct nvme_ns *ns)
+#ifdef CONFIG_BLK_DEV_ZONED
+static void nvm_set_zone_offline(struct nvme_ns *ns, struct blk_zone *zone,
+				 sector_t sect)
+{
+	zone->start = zone->wp = sect << (ns->lba_shift - 9);
+	zone->len = blk_queue_zone_sectors(ns->queue);
+	zone->type = BLK_ZONE_TYPE_SEQWRITE_REQ;
+	zone->cond = BLK_ZONE_COND_OFFLINE;
+	zone->reset = 0;
+	zone->non_seq = 0;
+}
+
+static void nvm_set_zone_from_chunk(struct nvme_ns *ns, struct blk_zone *zone,
+				    struct nvm_chk_meta *chk)
+{
+	int type = chk->type & 0xf;
+	int shift = ns->lba_shift - 9;
+
+	zone->start = chk->slba << shift;
+	zone->len = chk->cnlb << shift;
+	zone->wp = zone->start + (chk->wp << shift);
+
+	switch (type) {
+		case NVM_CHK_TP_W_SEQ:
+			zone->type = BLK_ZONE_TYPE_SEQWRITE_REQ;
+			break;
+		case NVM_CHK_TP_W_RAN:
+			zone->type = BLK_ZONE_TYPE_CONVENTIONAL;
+			break;
+	}
+
+	switch (chk->state) {
+		case NVM_CHK_ST_FREE:
+			zone->cond = BLK_ZONE_COND_EMPTY;
+			break;
+		case NVM_CHK_ST_CLOSED:
+			zone->cond = BLK_ZONE_COND_FULL;
+			break;
+		case NVM_CHK_ST_OPEN:
+			zone->cond = BLK_ZONE_COND_IMP_OPEN;
+			break;
+		case NVM_CHK_ST_OFFLINE:
+			zone->cond = BLK_ZONE_COND_OFFLINE;
+			break;
+	}
+}
+
+static struct nvm_chk_meta *nvm_get_chunks(struct nvme_ns *ns,
+					   struct request *req,
+					   unsigned int nr_zones,
+					   unsigned int *nr_chunks)
 {
 	struct nvm_dev *ndev = ns->ndev;
-	struct nvm_geo *geo = &ndev->geo;
+	struct nvm_chk_meta *chunks;
+	struct ppa_addr ppa;
+	int chunk_off;
+
+	ppa.ppa = blk_rq_pos(req) >> (ns->lba_shift - 9);
+	chunk_off = dev_to_chunk_off(ndev, ppa);
+
+	*nr_chunks = min_t(int, ndev->geo.all_chunks, nr_zones);
+	if (chunk_off + *nr_chunks > ndev->geo.all_chunks)
+		*nr_chunks = ndev->geo.all_chunks - chunk_off;
+
+	if (!*nr_chunks)
+		return NULL;
+
+	chunks = kzalloc(*nr_chunks * sizeof(struct nvm_chk_meta),
+			GFP_KERNEL);
+	if (!chunks)
+		return ERR_PTR(-BLK_STS_RESOURCE);
+
+	if (nvme_nvm_get_chk_meta(ndev, chunk_off, *nr_chunks, chunks)) {
+		kfree(chunks);
+		return ERR_PTR(-BLK_STS_IOERR);
+	}
+
+	return chunks;
+}
+
+blk_status_t nvme_nvm_zone_report(struct nvme_ns *ns, struct request *req,
+		struct nvme_command *cmd)
+{
+	struct blk_zone_report_hdr *hdr;
+	struct bio_vec bvec;
+	struct bvec_iter iter;
+	struct nvm_chk_meta *chunks;
+	unsigned int lba_shift = ns->lba_shift - 9;
+	sector_t slba = blk_rq_pos(req) >> lba_shift;
+	unsigned int zone_size = blk_queue_zone_sectors(req->q) >> lba_shift;
+	unsigned int bytes = 0;
+	unsigned int nr_zones, nr_chunks, chunk_id = 0;
+
+	/* Request can have room for more zones than available. Make sure to
+	 * only request for the available */
+	nr_zones = blk_rq_bytes(req) / sizeof(struct blk_zone) - 1;
+	nr_zones = min_t(unsigned int, nr_zones, req->q->nr_zones);
+
+	chunks = nvm_get_chunks(ns, req, nr_zones, &nr_chunks);
+	if (IS_ERR(chunks))
+		return -PTR_ERR(chunks);
+
+	/* The number of zones and chunks per namespace can deviate
+	 * since chunks are sparsely populated. We will have to fill
+	 * in offline zones for those zones that are not mapped to a
+	 * specific chunk metadata */
+	bio_for_each_segment(bvec, req->bio, iter) {
+		unsigned int offset = 0;
+		void *addr = kmap_atomic(bvec.bv_page);
+
+		if (!bytes) {
+			hdr = (struct blk_zone_report_hdr *)addr;
+			hdr->nr_zones = nr_zones;
+
+			bytes += sizeof(struct blk_zone);
+			offset += sizeof(struct blk_zone);
+		}
+
+		while (offset < bvec.bv_len && nr_zones) {
+			struct blk_zone *zone = addr + offset;
+
+			if (nr_chunks && chunks[chunk_id].slba == slba) {
+				nvm_set_zone_from_chunk(ns, zone,
+							&chunks[chunk_id]);
+				chunk_id++;
+				nr_chunks--;
+			} else {
+				nvm_set_zone_offline(ns, zone, slba);
+			}
+
+			slba += zone_size;
+			bytes += sizeof(struct blk_zone);
+			offset += sizeof(struct blk_zone);
+			nr_zones--;
+		}
+
+		kunmap_atomic(addr);
+
+		if (!nr_zones)
+			break;
+	}
+
+	kfree(chunks);
+	return BLK_STS_OK;
+}
+#endif /* CONFIG_BLK_DEV_ZONED */
+
+void nvme_nvm_update_nvm_info(struct nvme_ns *ns)
+{
+	struct nvm_dev *dev = ns->ndev;
+	struct nvm_geo *geo = &dev->geo;
+	int shift = ns->lba_shift - 9;
+	int zone_size = 1 << (dev->geo.addrf.sec_len + shift);
 
 	geo->csecs = 1 << ns->lba_shift;
 	geo->sos = ns->ms;
+
+	blk_queue_chunk_sectors(ns->queue, zone_size);
+#ifdef CONFIG_BLK_DEV_ZONED
+	ns->queue->limits.zoned = BLK_ZONED_HM;
+	ns->queue->nr_zones = get_capacity(ns->disk) >>
+					(dev->geo.addrf.sec_len + shift);
+#endif /* CONFIG_BLK_DEV_ZONED */
 }
 
 int nvme_nvm_register(struct nvme_ns *ns, char *disk_name, int node)

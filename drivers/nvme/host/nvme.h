@@ -516,6 +516,16 @@ void nvme_nvm_unregister(struct nvme_ns *ns);
 int nvme_nvm_register_sysfs(struct nvme_ns *ns);
 void nvme_nvm_unregister_sysfs(struct nvme_ns *ns);
 int nvme_nvm_ioctl(struct nvme_ns *ns, unsigned int cmd, unsigned long arg);
+#ifdef CONFIG_BLK_DEV_ZONED
+blk_status_t nvme_nvm_zone_report(struct nvme_ns *ns, struct request *rq,
+		struct nvme_command *cmd);
+#else
+static inline blk_status_t nvme_nvm_zone_report(struct nvme_ns *ns,
+		struct request *req, struct nvme_command *cmd)
+{
+	return BLK_STS_IOERR;
+}
+#endif /* CONFIG_BLK_DEV_ZONED */
 #else
 static inline void nvme_nvm_update_nvm_info(struct nvme_ns *ns) {};
 static inline int nvme_nvm_register(struct nvme_ns *ns, char *disk_name,
@@ -534,6 +544,11 @@ static inline int nvme_nvm_ioctl(struct nvme_ns *ns, unsigned int cmd,
 							unsigned long arg)
 {
 	return -ENOTTY;
+}
+static inline blk_status_t nvme_nvm_zone_report(struct nvme_ns *ns,
+		struct request *req, struct nvme_command *cmd)
+{
+	return BLK_STS_IOERR;
 }
 #endif /* CONFIG_NVM */
 
