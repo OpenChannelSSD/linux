@@ -766,7 +766,7 @@ static int ide_init_queue(ide_drive_t *drive)
 	 *	limits and LBA48 we could raise it but as yet
 	 *	do not.
 	 */
-	q = blk_alloc_queue_node(GFP_KERNEL, hwif_to_node(hwif));
+	q = blk_alloc_queue_node(GFP_KERNEL, hwif_to_node(hwif), NULL);
 	if (!q)
 		return 1;
 
@@ -928,7 +928,7 @@ static int exact_lock(dev_t dev, void *data)
 {
 	struct gendisk *p = data;
 
-	if (!get_disk(p))
+	if (!get_disk_and_module(p))
 		return -1;
 	return 0;
 }
