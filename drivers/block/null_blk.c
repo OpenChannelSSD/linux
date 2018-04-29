@@ -15,6 +15,7 @@
 #include <linux/configfs.h>
 #include <linux/badblocks.h>
 #include <linux/fault-inject.h>
+#include <linux/vmalloc.h>
 
 #define PAGE_SECTORS_SHIFT	(PAGE_SHIFT - SECTOR_SHIFT)
 #define PAGE_SECTORS		(1 << PAGE_SECTORS_SHIFT)
@@ -24,6 +25,9 @@
 
 #define TICKS_PER_SEC		50ULL
 #define TIMER_INTERVAL		(NSEC_PER_SEC / TICKS_PER_SEC)
+
+/* The zone_size granularity is 1MB. */
+#define ZONE_SIZE_SHIFT		11
 
 #ifdef CONFIG_BLK_DEV_NULL_BLK_FAULT_INJECTION
 static DECLARE_FAULT_ATTR(null_timeout_attr);
@@ -101,9 +105,14 @@ struct nullb_device {
 	unsigned int curr_cache;
 	struct badblocks badblocks;
 
+	unsigned int nr_zones;
+	struct blk_zone *zones;
+	sector_t zone_size_sects;
+
 	unsigned long size; /* device size in MB */
 	unsigned long completion_nsec; /* time in ns to complete a request */
 	unsigned long cache_size; /* disk cache size in MB */
+	unsigned long zone_size; /* zone size in MB if device is zoned */
 	unsigned int submit_queues; /* number of submission queues */
 	unsigned int home_node; /* home node for the device */
 	unsigned int queue_mode; /* block interface */
@@ -117,6 +126,7 @@ struct nullb_device {
 	bool power; /* power on/off the device */
 	bool memory_backed; /* if data is stored in memory */
 	bool discard; /* if support discard */
+	bool zoned; /* if device is zoned */
 };
 
 struct nullb {
@@ -254,6 +264,14 @@ static bool g_use_per_node_hctx;
 module_param_named(use_per_node_hctx, g_use_per_node_hctx, bool, 0444);
 MODULE_PARM_DESC(use_per_node_hctx, "Use per-node allocation for hardware context queues. Default: false");
 
+static bool g_zoned;
+module_param_named(zoned, g_zoned, bool, S_IRUGO);
+MODULE_PARM_DESC(zoned, "Make device as a host-managed zoned block device. Default: false");
+
+static unsigned long g_zone_size = 256;
+module_param_named(zone_size, g_zone_size, ulong, S_IRUGO);
+MODULE_PARM_DESC(zone_size, "Zone size in MB when block device is zoned: Default: 256");
+
 static struct nullb_device *null_alloc_dev(void);
 static void null_free_dev(struct nullb_device *dev);
 static void null_del_dev(struct nullb *nullb);
@@ -357,6 +375,8 @@ NULLB_DEVICE_ATTR(memory_backed, bool);
 NULLB_DEVICE_ATTR(discard, bool);
 NULLB_DEVICE_ATTR(mbps, uint);
 NULLB_DEVICE_ATTR(cache_size, ulong);
+NULLB_DEVICE_ATTR(zoned, bool);
+NULLB_DEVICE_ATTR(zone_size, ulong);
 
 static ssize_t nullb_device_power_show(struct config_item *item, char *page)
 {
@@ -468,6 +488,8 @@ static struct configfs_attribute *nullb_device_attrs[] = {
 	&nullb_device_attr_mbps,
 	&nullb_device_attr_cache_size,
 	&nullb_device_attr_badblocks,
+	&nullb_device_attr_zoned,
+	&nullb_device_attr_zone_size,
 	NULL,
 };
 
@@ -520,7 +542,7 @@ nullb_group_drop_item(struct config_group *group, struct config_item *item)
 
 static ssize_t memb_group_features_show(struct config_item *item, char *page)
 {
-	return snprintf(page, PAGE_SIZE, "memory_backed,discard,bandwidth,cache,badblocks\n");
+	return snprintf(page, PAGE_SIZE, "memory_backed,discard,bandwidth,cache,badblocks,zoned,zone_size\n");
 }
 
 CONFIGFS_ATTR_RO(memb_group_, features);
@@ -549,6 +571,155 @@ static struct configfs_subsystem nullb_subsys = {
 		},
 	},
 };
+
+#ifdef CONFIG_BLK_DEV_ZONED
+static int null_zone_init(struct nullb_device *dev)
+{
+	sector_t size = (sector_t)dev->size * 1024 * 1024ULL;
+	sector_t sector = 0;
+	unsigned int i;
+
+	dev->zone_size_sects = dev->zone_size << ZONE_SIZE_SHIFT;
+	dev->nr_zones = (size >> 9) / dev->zone_size_sects;
+	dev->zones = kvmalloc_array(dev->nr_zones, sizeof(struct blk_zone),
+			GFP_KERNEL | __GFP_ZERO);
+	if (!dev->zones)
+		return -ENOMEM;
+
+	for (i = 0; i < dev->nr_zones; i++) {
+		struct blk_zone *zone = &dev->zones[i];
+
+		zone->start = zone->wp = sector;
+		zone->len = dev->zone_size_sects;
+		zone->type = BLK_ZONE_TYPE_SEQWRITE_REQ;
+		zone->cond = BLK_ZONE_COND_EMPTY;
+
+		sector += dev->zone_size_sects;
+	}
+
+	return 0;
+}
+
+static void null_zone_exit(struct nullb_device *dev)
+{
+	vfree(dev->zones);
+}
+
+static void null_zone_fill_rq(struct nullb_device *dev, struct request *rq,
+			      unsigned int zno, unsigned int nr_zones)
+{
+	struct blk_zone_report_hdr *hdr;
+	struct bio_vec bvec;
+	struct bvec_iter iter;
+	void *addr;
+	unsigned int zones_to_cpy;
+	int first = 1;
+
+	bio_for_each_segment(bvec, rq->bio, iter) {
+		addr = kmap_atomic(bvec.bv_page);
+
+		zones_to_cpy = bvec.bv_len / sizeof(struct blk_zone);
+
+		if (first) {
+			hdr = (struct blk_zone_report_hdr *)addr;
+			hdr->nr_zones = nr_zones;
+
+			zones_to_cpy--;
+			addr += sizeof(struct blk_zone_report_hdr);
+			first = 0;
+		}
+
+		zones_to_cpy = min_t(unsigned int, zones_to_cpy, nr_zones);
+
+		memcpy(addr, &dev->zones[zno],
+				zones_to_cpy * sizeof(struct blk_zone));
+
+
+		kunmap_atomic(addr);
+
+		nr_zones -= zones_to_cpy;
+		zno += zones_to_cpy;
+
+		if (!nr_zones)
+			break;
+	}
+}
+
+static blk_status_t null_zone_report(struct nullb *nullb,
+				     struct nullb_cmd *cmd)
+{
+	struct nullb_device *dev = nullb->dev;
+	struct request *rq = cmd->rq;
+	unsigned int zno = blk_rq_pos(rq) / dev->zone_size_sects;
+	unsigned int nr_zones = dev->nr_zones - zno;
+	unsigned int max_zones = (blk_rq_bytes(rq) / sizeof(struct blk_zone)) - 1;
+
+	nr_zones = min_t(unsigned int, nr_zones, max_zones);
+
+	null_zone_fill_rq(nullb->dev, rq, zno, nr_zones);
+
+	return BLK_STS_OK;
+}
+
+static void null_zone_write(struct nullb_cmd *cmd)
+{
+	struct nullb_device *dev = cmd->nq->dev;
+	struct request *rq = cmd->rq;
+	sector_t sector = blk_rq_pos(rq);
+	unsigned int zno, rq_sectors;
+	struct blk_zone *zone;
+
+	zno = sector / dev->zone_size_sects;
+	zone = &dev->zones[zno];
+	rq_sectors = blk_rq_sectors(rq);
+
+	if (zone->cond == BLK_ZONE_COND_IMP_OPEN) {
+		u64 last_sect = zone->start + zone->len;
+
+		if (zone->wp == blk_rq_pos(rq)) {
+			if (zone->wp + rq_sectors < last_sect) {
+				zone->wp += rq_sectors;
+			} else if (zone->wp + rq_sectors == last_sect) {
+				zone->cond = BLK_ZONE_COND_CLOSED;
+				zone->wp += rq_sectors;
+			} else { /* zone->wp + rq_sectors > last_sect... */
+				cmd->error = BLK_STS_IOERR;
+			}
+		} else {
+			cmd->error = BLK_STS_IOERR;
+		}
+	} else if (zone->cond == BLK_ZONE_COND_EMPTY) {
+		zone->cond = BLK_ZONE_COND_IMP_OPEN;
+		zone->wp += rq_sectors;
+	} else if (zone->cond == BLK_ZONE_COND_CLOSED) {
+		cmd->error = BLK_STS_IOERR;
+	}
+}
+
+static void null_zone_reset(struct nullb_cmd *cmd)
+{
+	struct nullb_device *dev = cmd->nq->dev;
+	struct request *rq = cmd->rq;
+	unsigned int zno = blk_rq_pos(rq) / dev->zone_size_sects;
+	struct blk_zone *zone = &dev->zones[zno];
+
+	zone->cond = BLK_ZONE_COND_EMPTY;
+	zone->wp = zone->start;
+}
+#else
+static inline int null_zone_init(struct nullb_device *dev)
+{
+	return -EINVAL;
+}
+static inline void null_zone_exit(struct nullb_device *dev) {}
+static inline blk_status_t null_zone_report(struct nullb *nullb,
+					    struct nullb_cmd *cmd)
+{
+	return BLK_STS_NOTSUPP;
+}
+static inline void null_zone_write(struct nullb_cmd *cmd) {}
+static inline void null_zone_reset(struct nullb_cmd *cmd) {}
+#endif
 
 static inline int null_cache_active(struct nullb *nullb)
 {
@@ -579,6 +750,8 @@ static struct nullb_device *null_alloc_dev(void)
 	dev->hw_queue_depth = g_hw_queue_depth;
 	dev->blocking = g_blocking;
 	dev->use_per_node_hctx = g_use_per_node_hctx;
+	dev->zoned = g_zoned;
+	dev->zone_size = g_zone_size;
 	return dev;
 }
 
@@ -587,6 +760,7 @@ static void null_free_dev(struct nullb_device *dev)
 	if (!dev)
 		return;
 
+	null_zone_exit(dev);
 	badblocks_exit(&dev->badblocks);
 	kfree(dev);
 }
@@ -1219,6 +1393,11 @@ static blk_status_t null_handle_cmd(struct nullb_cmd *cmd)
 	struct nullb *nullb = dev->nullb;
 	int err = 0;
 
+	if (req_op(cmd->rq) == REQ_OP_ZONE_REPORT) {
+		cmd->error = null_zone_report(nullb, cmd);
+		goto out;
+	}
+
 	if (test_bit(NULLB_DEV_FL_THROTTLED, &dev->flags)) {
 		struct request *rq = cmd->rq;
 
@@ -1283,6 +1462,13 @@ static blk_status_t null_handle_cmd(struct nullb_cmd *cmd)
 		}
 	}
 	cmd->error = errno_to_blk_status(err);
+
+	if (!cmd->error && dev->zoned) {
+		if (req_op(cmd->rq) == REQ_OP_WRITE)
+			null_zone_write(cmd);
+		else if (req_op(cmd->rq) == REQ_OP_ZONE_RESET)
+			null_zone_reset(cmd);
+	}
 out:
 	/* Complete IO by inline, softirq or timer */
 	switch (dev->irqmode) {
@@ -1809,6 +1995,16 @@ static int null_add_dev(struct nullb_device *dev)
 		blk_queue_flush_queueable(nullb->q, true);
 	}
 
+	if (dev->zoned) {
+		if (null_zone_init(dev)) {
+			pr_err("null_blk: initialization error\n");
+			goto out_cleanup_blk_queue;
+		}
+
+		blk_queue_chunk_sectors(nullb->q, dev->zone_size_sects);
+		nullb->q->limits.zoned = BLK_ZONED_HM;
+	}
+
 	nullb->q->queuedata = nullb;
 	blk_queue_flag_set(QUEUE_FLAG_NONROT, nullb->q);
 	blk_queue_flag_clear(QUEUE_FLAG_ADD_RANDOM, nullb->q);
@@ -1827,13 +2023,16 @@ static int null_add_dev(struct nullb_device *dev)
 
 	rv = null_gendisk_register(nullb);
 	if (rv)
-		goto out_cleanup_blk_queue;
+		goto out_cleanup_zone;
 
 	mutex_lock(&lock);
 	list_add_tail(&nullb->list, &nullb_list);
 	mutex_unlock(&lock);
 
 	return 0;
+out_cleanup_zone:
+	if (dev->zoned)
+		null_zone_exit(dev);
 out_cleanup_blk_queue:
 	blk_cleanup_queue(nullb->q);
 out_cleanup_tags:
