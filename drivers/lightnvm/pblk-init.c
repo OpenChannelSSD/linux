@@ -356,7 +356,15 @@ static int pblk_core_init(struct pblk *pblk)
 	atomic64_set(&pblk->nr_flush, 0);
 	pblk->nr_flush_rst = 0;
 
-	pblk->pgs_in_buffer = geo->mw_cunits * geo->all_luns;
+	if (geo->mw_cunits) {
+		pblk->pgs_in_buffer = geo->mw_cunits * geo->all_luns;
+	} else {
+		pblk->pgs_in_buffer = (geo->ws_opt << 3) * geo->all_luns;
+		/*
+		 * Some devices can expose mw_cunits equal to 0, so let's use
+		 * here default safe value for MLC.
+		 */
+	}
 
 	pblk->min_write_pgs = geo->ws_opt * (geo->csecs / PAGE_SIZE);
 	max_write_ppas = pblk->min_write_pgs * geo->all_luns;

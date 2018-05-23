@@ -338,7 +338,6 @@ static int nvme_nvm_setup_12(struct nvme_nvm_id12 *id,
 
 	geo->ws_min = sec_per_pg;
 	geo->ws_opt = sec_per_pg;
-	geo->mw_cunits = geo->ws_opt << 3;	/* default to MLC safe values */
 
 	/* Do not impose values for maximum number of open blocks as it is
 	 * unspecified in 1.2. Users of 1.2 must be aware of this and eventually
