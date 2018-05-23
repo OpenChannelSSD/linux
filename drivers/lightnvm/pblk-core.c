@@ -868,6 +868,11 @@ int pblk_line_read_smeta(struct pblk *pblk, struct pblk_line *line)
 {
 	u64 bpaddr = pblk_line_smeta_start(pblk, line);
 
+	if (bpaddr == -1) {
+		/* Whole line is bad - do not try to read smeta. */
+		return 1;
+	}
+
 	return pblk_line_submit_smeta_io(pblk, line, bpaddr, PBLK_READ_RECOV);
 }
 
