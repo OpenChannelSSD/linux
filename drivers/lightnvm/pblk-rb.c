@@ -266,21 +266,18 @@ out:
  * Update the l2p entry for all sectors stored on the write buffer. This means
  * that all future lookups to the l2p table will point to a device address, not
  * to the cacheline in the write buffer.
+ * Caller must ensure that rb->w_lock is taken.
  */
 void pblk_rb_sync_l2p(struct pblk_rb *rb)
 {
 	unsigned int sync;
 	unsigned int to_update;
 
-	spin_lock(&rb->w_lock);
-
 	/* Protect from reads and writes */
 	sync = smp_load_acquire(&rb->sync);
 
 	to_update = pblk_rb_ring_count(sync, rb->l2p_update, rb->nr_entries);
 	__pblk_rb_update_l2p(rb, to_update);
-
-	spin_unlock(&rb->w_lock);
 }
 
 /*
@@ -462,6 +459,8 @@ int pblk_rb_may_write_user(struct pblk_rb *rb, struct bio *bio,
 	spin_lock(&rb->w_lock);
 	io_ret = pblk_rl_user_may_insert(&pblk->rl, nr_entries);
 	if (io_ret) {
+		/* Sync RB & L2P in order to update rate limiter values */
+		pblk_rb_sync_l2p(rb);
 		spin_unlock(&rb->w_lock);
 		return io_ret;
 	}
