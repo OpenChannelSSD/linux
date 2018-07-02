@@ -716,11 +716,12 @@ int nvm_get_chunk_meta(struct nvm_tgt_dev *tgt_dev, struct nvm_chk_meta *meta,
 		struct ppa_addr ppa, int nchks)
 {
 	struct nvm_dev *dev = tgt_dev->parent;
+	int chk_off;
 
 	nvm_ppa_tgt_to_dev(tgt_dev, &ppa, 1);
+	chk_off = dev_to_chunk_off(dev, dev_to_generic_addr(dev, ppa));
 
-	return dev->ops->get_chk_meta(tgt_dev->parent, meta,
-						(sector_t)ppa.ppa, nchks);
+	return dev->ops->get_chk_meta(tgt_dev->parent, meta, chk_off, nchks);
 }
 EXPORT_SYMBOL(nvm_get_chunk_meta);
 
