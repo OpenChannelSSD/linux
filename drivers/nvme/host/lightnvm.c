@@ -573,16 +573,14 @@ static int nvme_nvm_set_bb_tbl(struct nvm_dev *nvmdev, struct ppa_addr *ppas,
  * Expect the lba in device format
  */
 static int nvme_nvm_get_chk_meta(struct nvm_dev *ndev,
-				 sector_t slba, int nchks,
+				 int chk_off, int nchks,
 				 struct nvm_chk_meta *meta)
 {
-	struct nvm_geo *geo = &ndev->geo;
 	struct nvme_ns *ns = ndev->q->queuedata;
 	struct nvme_ctrl *ctrl = ns->ctrl;
 	struct nvme_nvm_chk_meta *dev_meta = (struct nvme_nvm_chk_meta *)meta;
-	struct ppa_addr ppa;
 	size_t left = nchks * sizeof(struct nvme_nvm_chk_meta);
-	size_t log_pos, offset, len;
+	size_t offset, len;
 	int ret, i, max_len;
 
 	/*
@@ -591,15 +589,7 @@ static int nvme_nvm_get_chk_meta(struct nvm_dev *ndev,
 	 */
 	max_len = min_t(unsigned int, ctrl->max_hw_sectors << 9, 256 * 1024);
 
-	/* Normalize lba address space to obtain log offset */
-	ppa.ppa = slba;
-	ppa = dev_to_generic_addr(ndev, ppa);
-
-	log_pos = ppa.m.chk;
-	log_pos += ppa.m.pu * geo->num_chk;
-	log_pos += ppa.m.grp * geo->num_lun * geo->num_chk;
-
-	offset = log_pos * sizeof(struct nvme_nvm_chk_meta);
+	offset = chk_off * sizeof(struct nvme_nvm_chk_meta);
 
 	while (left) {
 		len = min_t(unsigned int, left, max_len);

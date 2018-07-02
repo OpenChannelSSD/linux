@@ -86,7 +86,7 @@ struct nvm_chk_meta;
 typedef int (nvm_id_fn)(struct nvm_dev *);
 typedef int (nvm_op_bb_tbl_fn)(struct nvm_dev *, struct ppa_addr, u8 *);
 typedef int (nvm_op_set_bb_fn)(struct nvm_dev *, struct ppa_addr *, int, int);
-typedef int (nvm_get_chk_meta_fn)(struct nvm_dev *, sector_t, int,
+typedef int (nvm_get_chk_meta_fn)(struct nvm_dev *, int, int,
 							struct nvm_chk_meta *);
 typedef int (nvm_submit_io_fn)(struct nvm_dev *, struct nvm_rq *);
 typedef int (nvm_submit_io_sync_fn)(struct nvm_dev *, struct nvm_rq *);
@@ -485,6 +485,31 @@ static inline struct ppa_addr dev_to_generic_addr(struct nvm_dev *dev,
 	}
 
 	return l;
+}
+
+static inline int dev_to_chunk_off(struct nvm_dev *dev, struct ppa_addr r)
+{
+	int chk_off;
+
+	r = dev_to_generic_addr(dev, r);
+
+	/* If trying to access an "offline" chunk. Carry over to the next
+	 * available chunk */
+	if (r.m.chk >= dev->geo.num_chk) {
+		r.m.chk = 0;
+		r.m.pu++;
+	}
+
+	if (r.m.pu >= dev->geo.num_lun) {
+		r.m.pu = 0;
+		r.m.grp++;
+	}
+
+	chk_off = r.m.chk;
+	chk_off += r.m.pu * dev->geo.num_chk;
+	chk_off += r.m.grp * dev->geo.num_lun * dev->geo.num_chk;
+
+	return chk_off;
 }
 
 typedef blk_qc_t (nvm_tgt_make_rq_fn)(struct request_queue *, struct bio *);
