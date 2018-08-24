@@ -26,6 +26,7 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 			      unsigned int valid_secs)
 {
 	struct pblk_line *line = pblk_line_get_data(pblk);
+	struct pblk_sec_meta *meta;
 	struct pblk_emeta *emeta;
 	struct pblk_w_ctx *w_ctx;
 	__le64 *lba_list;
@@ -57,6 +58,8 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 		/* ppa to be sent to the device */
 		ppa_list[i] = addr_to_gen_ppa(pblk, paddr, line->id);
 
+		meta = sec_meta_index(pblk, meta_list, i);
+
 		/* Write context for target bio completion on write buffer. Note
 		 * that the write buffer is protected by the sync backpointer,
 		 * and a single writer thread have access to each specific entry
@@ -68,14 +71,14 @@ static int pblk_map_page_data(struct pblk *pblk, unsigned int sentry,
 			kref_get(&line->ref);
 			w_ctx = pblk_rb_w_ctx(&pblk->rwb, sentry + i);
 			w_ctx->ppa = ppa_list[i];
-			meta_list[i].lba = cpu_to_le64(w_ctx->lba);
+			meta->lba = cpu_to_le64(w_ctx->lba);
 			lba_list[paddr] = cpu_to_le64(w_ctx->lba);
 			if (lba_list[paddr] != addr_empty)
 				line->nr_valid_lbas++;
 			else
 				atomic64_inc(&pblk->pad_wa);
 		} else {
-			lba_list[paddr] = meta_list[i].lba = addr_empty;
+			lba_list[paddr] = meta->lba = addr_empty;
 			__pblk_map_invalidate(pblk, line, paddr);
 		}
 	}
@@ -88,7 +91,7 @@ void pblk_map_rq(struct pblk *pblk, struct nvm_rq *rqd, unsigned int sentry,
 		 unsigned long *lun_bitmap, unsigned int valid_secs,
 		 unsigned int off)
 {
-	struct pblk_sec_meta *meta_list = rqd->meta_list;
+	struct pblk_sec_meta *meta_list;
 	struct ppa_addr *ppa_list = nvm_rq_to_ppa_list(rqd);
 	unsigned int map_secs;
 	int min = pblk->min_write_pgs;
@@ -96,8 +99,10 @@ void pblk_map_rq(struct pblk *pblk, struct nvm_rq *rqd, unsigned int sentry,
 
 	for (i = off; i < rqd->nr_ppas; i += min) {
 		map_secs = (i + min > valid_secs) ? (valid_secs % min) : min;
+		meta_list = sec_meta_index(pblk, rqd->meta_list, i);
+
 		if (pblk_map_page_data(pblk, sentry + i, &ppa_list[i],
-					lun_bitmap, &meta_list[i], map_secs)) {
+					lun_bitmap, meta_list, map_secs)) {
 			bio_put(rqd->bio);
 			pblk_free_rqd(pblk, rqd, PBLK_WRITE);
 			pblk_pipeline_stop(pblk);
@@ -113,8 +118,8 @@ void pblk_map_erase_rq(struct pblk *pblk, struct nvm_rq *rqd,
 	struct nvm_tgt_dev *dev = pblk->dev;
 	struct nvm_geo *geo = &dev->geo;
 	struct pblk_line_meta *lm = &pblk->lm;
-	struct pblk_sec_meta *meta_list = rqd->meta_list;
 	struct ppa_addr *ppa_list = nvm_rq_to_ppa_list(rqd);
+	struct pblk_sec_meta *meta_list;
 	struct pblk_line *e_line, *d_line;
 	unsigned int map_secs;
 	int min = pblk->min_write_pgs;
@@ -122,8 +127,10 @@ void pblk_map_erase_rq(struct pblk *pblk, struct nvm_rq *rqd,
 
 	for (i = 0; i < rqd->nr_ppas; i += min) {
 		map_secs = (i + min > valid_secs) ? (valid_secs % min) : min;
+		meta_list = sec_meta_index(pblk, rqd->meta_list, i);
+
 		if (pblk_map_page_data(pblk, sentry + i, &ppa_list[i],
-					lun_bitmap, &meta_list[i], map_secs)) {
+					lun_bitmap, meta_list, map_secs)) {
 			bio_put(rqd->bio);
 			pblk_free_rqd(pblk, rqd, PBLK_WRITE);
 			pblk_pipeline_stop(pblk);

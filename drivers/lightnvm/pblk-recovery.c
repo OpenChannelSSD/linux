@@ -158,7 +158,7 @@ static int pblk_recov_pad_line(struct pblk *pblk, struct pblk_line *line,
 {
 	struct nvm_tgt_dev *dev = pblk->dev;
 	struct nvm_geo *geo = &dev->geo;
-	struct pblk_sec_meta *meta_list;
+	struct pblk_sec_meta *meta;
 	struct pblk_pad_rq *pad_rq;
 	struct nvm_rq *rqd;
 	struct bio *bio;
@@ -219,8 +219,6 @@ next_pad_rq:
 	rqd->end_io = pblk_end_io_recov;
 	rqd->private = pad_rq;
 
-	meta_list = rqd->meta_list;
-
 	for (i = 0; i < rqd->nr_ppas; ) {
 		struct ppa_addr ppa;
 		int pos;
@@ -242,8 +240,10 @@ next_pad_rq:
 			dev_ppa = addr_to_gen_ppa(pblk, w_ptr, line->id);
 
 			pblk_map_invalidate(pblk, dev_ppa);
-			lba_list[w_ptr] = meta_list[i].lba = addr_empty;
 			rqd->ppa_list[i] = dev_ppa;
+
+			meta = sec_meta_index(pblk, rqd->meta_list, i);
+			lba_list[w_ptr] = meta->lba = addr_empty;
 		}
 	}
 
@@ -336,7 +336,7 @@ static int pblk_recov_scan_oob(struct pblk *pblk, struct pblk_line *line,
 	struct nvm_tgt_dev *dev = pblk->dev;
 	struct nvm_geo *geo = &dev->geo;
 	struct ppa_addr *ppa_list;
-	struct pblk_sec_meta *meta_list;
+	struct pblk_sec_meta *meta_list, *meta;
 	struct nvm_rq *rqd;
 	struct bio *bio;
 	void *data;
@@ -434,7 +434,10 @@ retry_rq:
 	}
 
 	for (i = 0; i < rqd->nr_ppas; i++) {
-		u64 lba = le64_to_cpu(meta_list[i].lba);
+		u64 lba;
+
+		meta = sec_meta_index(pblk, meta_list, i);
+		lba = le64_to_cpu(meta->lba);
 
 		lba_list[paddr++] = cpu_to_le64(lba);
 
@@ -473,13 +476,22 @@ static int pblk_recov_l2p_from_oob(struct pblk *pblk, struct pblk_line *line)
 	if (!meta_list)
 		return -ENOMEM;
 
-	ppa_list = (void *)(meta_list) + pblk_dma_meta_size;
-	dma_ppa_list = dma_meta_list + pblk_dma_meta_size;
+	if (pblk->dma_shared) {
+		ppa_list = (void *)(meta_list) + pblk->dma_meta_size;
+		dma_ppa_list = dma_meta_list + pblk->dma_meta_size;
+	} else {
+		ppa_list = nvm_dev_dma_alloc(dev->parent, GFP_KERNEL,
+							&dma_ppa_list);
+		if (!ppa_list) {
+			ret = -ENOMEM;
+			goto free_meta_list;
+		}
+	}
 
 	data = kcalloc(pblk->max_write_pgs, geo->csecs, GFP_KERNEL);
 	if (!data) {
 		ret = -ENOMEM;
-		goto free_meta_list;
+		goto free_ppa_list;
 	}
 
 	rqd = mempool_alloc(&pblk->r_rq_pool, GFP_KERNEL);
@@ -504,9 +516,11 @@ static int pblk_recov_l2p_from_oob(struct pblk *pblk, struct pblk_line *line)
 out:
 	mempool_free(rqd, &pblk->r_rq_pool);
 	kfree(data);
+free_ppa_list:
+	if (!pblk->dma_shared)
+		nvm_dev_dma_free(dev->parent, ppa_list, dma_ppa_list);
 free_meta_list:
 	nvm_dev_dma_free(dev->parent, meta_list, dma_meta_list);
-
 	return ret;
 }
 

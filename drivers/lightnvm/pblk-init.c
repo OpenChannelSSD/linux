@@ -395,6 +395,20 @@ static int pblk_core_init(struct pblk *pblk)
 	struct nvm_geo *geo = &dev->geo;
 	int ret, max_write_ppas;
 
+	if (sizeof(struct pblk_sec_meta) > geo->sos) {
+		pblk_err(pblk, "OOB area too small. Min %lu bytes (%d)\n",
+			(unsigned long)sizeof(struct pblk_sec_meta), geo->sos);
+		return -EINTR;
+	}
+
+	pblk->dma_ppa_size = (sizeof(u64) * NVM_MAX_VLBA);
+	pblk->dma_meta_size = geo->sos * NVM_MAX_VLBA;
+
+	if (pblk->dma_ppa_size + pblk->dma_meta_size > PAGE_SIZE)
+		pblk->dma_shared = false;
+	else
+		pblk->dma_shared = true;
+
 	atomic64_set(&pblk->user_wa, 0);
 	atomic64_set(&pblk->pad_wa, 0);
 	atomic64_set(&pblk->gc_wa, 0);
