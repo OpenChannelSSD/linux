@@ -1,18 +1,11 @@
-Linux kernel
-============
+FTLforOCSSD_hotcoldseperation
 
-This file was moved to Documentation/admin-guide/README.rst
+Team LAST Graduation Project 마지막조
 
-Please notice that there are several guides for kernel developers and users.
-These guides can be rendered in a number of formats, like HTML and PDF.
+Open Channel SSD를 위한 FTL을 개발한다
 
-In order to build the documentation, use ``make htmldocs`` or
-``make pdfdocs``.
+Virtual OCSSD, QEMU, LightNVM 등의 개발 환경에서 프로젝트를 진행한다.
 
-There are various text files in the Documentation/ subdirectory,
-several of them using the Restructured Text markup notation.
-See Documentation/00-INDEX for a list of what is contained in each file.
+https://github.com/OpenChannelSSD
 
-Please read the Documentation/process/changes.rst file, as it contains the
-requirements for building and running the kernel, and information about
-the problems which may result by upgrading your kernel.
+Hot/Cold Page Seperation 기법을 개발, FTL에 적용하여 OCSSD의 성능을 향상시킨다.
